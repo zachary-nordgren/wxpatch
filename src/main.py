@@ -22,6 +22,8 @@ from config import (
     QUIET_OPTION,
     NEWEST_FIRST_OPTION,
     SORT_CHRONOLOGICALLY_OPTION,
+    MERGED_DIR,
+    DATA_DIR,
 )
 from downloader import get_remote_file_list, download_archives
 from file_io import setup_directories
@@ -43,6 +45,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Process NOAA Global Hourly weather data"
     )
+    # Add the new clean option
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clean up log files, merged data, and temp directories (preserves raw downloads)",
+    )
+    # Existing arguments
     parser.add_argument(
         DOWNLOAD_ONLY_OPTION,
         action="store_true",
@@ -89,6 +98,11 @@ def main():
         help="Sort station data chronologically after processing",
     )
     args = parser.parse_args()
+
+    # Run cleanup if requested and exit
+    if args.clean:
+        clean_directories()
+        return
 
     # Configure logging level based on verbosity
     if args.verbose:
@@ -168,6 +182,142 @@ def main():
     elapsed_time = time.time() - start_time
     logger.info(f"Processing completed in {elapsed_time:.2f} seconds")
     logger.info(f"Total stations updated: {len(updated_stations)}")
+
+
+def clean_directories():
+    """
+    Clean up log files, merged data, and temp directories.
+    Preserves raw data downloads.
+    """
+    import shutil
+    import os
+    import time
+    from pathlib import Path
+
+    print("Starting cleanup operation")
+
+    # Clean log file
+    log_path = Path(LOG_FILE)
+    if log_path.exists():
+        try:
+            # Close logger handlers first to release file handle
+            for handler in logging.getLogger().handlers[:]:
+                handler.close()
+                logging.getLogger().removeHandler(handler)
+
+            log_path.unlink()
+            print(f"Deleted log file: {log_path}")
+        except Exception as e:
+            print(f"Error deleting log file: {e}")
+
+    # Clean merged directory (but don't delete the directory itself)
+    if MERGED_DIR.exists():
+        try:
+            # Delete the SQLite database if it exists
+            db_path = MERGED_DIR / "wx_metadata.db"
+            if db_path.exists():
+                db_path.unlink()
+                print(f"Deleted metadata database: {db_path}")
+
+            # Also remove any WAL and SHM files
+            for related_file in MERGED_DIR.glob("wx_metadata.db-*"):
+                related_file.unlink()
+                print(f"Deleted related database file: {related_file}")
+
+            # Delete CSV metadata file if it exists
+            metadata_path = MERGED_DIR / "wx_info.csv"
+            if metadata_path.exists():
+                metadata_path.unlink()
+                print(f"Deleted metadata CSV: {metadata_path}")
+
+            # Delete all gzipped station files
+            count = 0
+            for station_file in MERGED_DIR.glob("*.csv.gz"):
+                station_file.unlink()
+                count += 1
+
+            print(f"Deleted {count} station files from {MERGED_DIR}")
+
+            # Delete any backup files
+            backup_count = 0
+            for backup_file in MERGED_DIR.glob("*.bak*"):
+                backup_file.unlink()
+                backup_count += 1
+
+            if backup_count > 0:
+                print(f"Deleted {backup_count} backup files")
+
+        except Exception as e:
+            print(f"Error cleaning merged directory: {e}")
+
+    # Clean temp directory and its contents
+    temp_dir = DATA_DIR / "temp"
+    if temp_dir.exists():
+        try:
+            # First try using rmtree with ignore_errors=True
+            print(f"Attempting to delete temp directory: {temp_dir}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+            # Check if directory still exists (might happen on Windows if files are locked)
+            if temp_dir.exists():
+                print("Temp directory still exists, trying more aggressive approach")
+
+                # On Windows, try more aggressive approach
+                if os.name == "nt":
+                    # Try to forcefully close any handles to the directory
+                    os.system(f"taskkill /F /IM python.exe /T")
+                    time.sleep(1)  # Give OS time to release handles
+
+                    # Try rmtree again
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                # If it still exists, try to clean contents
+                if temp_dir.exists():
+                    print("Could not remove directory, trying to delete contents")
+
+                    # Try deleting the contents using a temporary directory
+                    new_temp = temp_dir.with_name(f"temp_new_{int(time.time())}")
+                    if not new_temp.exists():
+                        new_temp.mkdir(parents=True, exist_ok=True)
+
+                    # For future runs, we'll use the new directory for temp
+                    with open(DATA_DIR / "temp_path.txt", "w") as f:
+                        f.write(str(new_temp))
+
+                    print(f"Created new temp directory at {new_temp}")
+                    print(f"Please manually delete {temp_dir} when possible")
+                else:
+                    print(f"Successfully deleted temp directory after retry")
+            else:
+                print(f"Successfully deleted temp directory: {temp_dir}")
+
+        except Exception as e:
+            print(f"Error during temp directory cleanup: {e}")
+
+            # Try to delete contents if full directory removal failed
+            try:
+                for item in temp_dir.glob("**/*"):
+                    if item.is_file():
+                        try:
+                            item.unlink()
+                            print(f"Deleted file: {item}")
+                        except Exception:
+                            print(f"Could not delete: {item}")
+                    elif item.is_dir():
+                        try:
+                            shutil.rmtree(item, ignore_errors=True)
+                            print(f"Deleted directory: {item}")
+                        except Exception:
+                            print(f"Could not delete: {item}")
+                print(f"Deleted contents of temp directory: {temp_dir}")
+            except Exception as nested_e:
+                print(f"Error deleting temp directory contents: {nested_e}")
+
+    print("Cleanup completed - raw downloads preserved")
+    return True
 
 
 if __name__ == "__main__":

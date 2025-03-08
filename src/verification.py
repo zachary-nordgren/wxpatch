@@ -94,14 +94,8 @@ def verify_timestamps_in_merged_file(station_id: str, timestamps: Set[str]) -> b
         # Check each timestamp
         for timestamp in timestamps:
             if timestamp not in content:
-                logger.debug(
-                    f"Timestamp {timestamp} not found in merged file for {station_id}"
-                )
                 return False
 
-        logger.debug(
-            f"All {len(timestamps)} timestamps found in merged file for {station_id}"
-        )
         return True
 
     except Exception as e:
@@ -131,10 +125,6 @@ def should_process_station_file(
 
     # Check if all timestamps exist in the merged file
     if not verify_timestamps_in_merged_file(station_id, sample_timestamps):
-        logger.debug(
-            f"Some timestamps from {station_id} not found in merged file, needs processing"
-        )
         return True
 
-    logger.debug(f"All timestamps from {station_id} found in merged file, skipping")
     return False

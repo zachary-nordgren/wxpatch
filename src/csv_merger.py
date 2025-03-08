@@ -30,66 +30,60 @@ def merge_headers(existing_header: List[str], new_header: List[str]) -> List[str
 
     return merged
 
-def get_canonical_headers(header1: List[str], header2: List[str]) -> List[str]:
+
+def get_canonical_headers(headers: List[str]) -> List[str]:
     """
-    Generate canonical headers based on ISD format specification.
-    
+    Order headers based on ISD format specification.
+
     Ensures consistent column ordering following the ISD specification:
     1. Metadata columns: STATION, DATE, SOURCE, REPORT_TYPE, CALL_SIGN, QUALITY_CONTROL
     2. Mandatory data columns: WND, CIG, VIS, TMP, DEW, SLP
-    3. Optional data columns (preserving original order)
+    3. Optional data columns (alphabetically sorted) - preserving numeric suffixes
     4. Final columns: REM, EQD
-    
+
     Args:
-        header1: First header list
-        header2: Second header list
-    
+        headers: List of column headers to order
+
     Returns:
         List of headers in canonical order
     """
-    # Create a set of all unique column names from both headers
-    all_columns = set(header1).union(set(header2))
-    
     # Define the metadata columns in their required order
-    metadata_cols = ["STATION", "DATE", "SOURCE", "REPORT_TYPE", "CALL_SIGN", "QUALITY_CONTROL"]
-    
+    metadata_cols = [
+        "STATION",
+        "DATE",
+        "SOURCE",
+        "REPORT_TYPE",
+        "CALL_SIGN",
+        "QUALITY_CONTROL",
+    ]
+
     # Define the mandatory data columns in their required order
     mandatory_cols = ["WND", "CIG", "VIS", "TMP", "DEW", "SLP"]
-    
+
     # Define the final columns in their required order
     final_cols = ["REM", "EQD"]
-    
-    # Initialize canonical headers with metadata and mandatory columns that exist
-    canonical_headers = [col for col in metadata_cols if col in all_columns]
-    canonical_headers.extend([col for col in mandatory_cols if col in all_columns])
-    
+
+    # Initialize canonical headers with metadata columns that exist
+    canonical_headers = [col for col in metadata_cols if col in headers]
+
+    # Add mandatory columns that exist
+    canonical_headers.extend([col for col in mandatory_cols if col in headers])
+
     # Collect optional columns (excluding metadata, mandatory, and final columns)
-    optional_cols = all_columns - set(metadata_cols) - set(mandatory_cols) - set(final_cols)
-    
-    # Get the column prefixes (e.g., "AH" from "AH1")
-    column_prefixes = {}
-    for col in optional_cols:
-        # Extract letter prefix and digits
-        prefix = ''.join([c for c in col if c.isalpha()])
-        if prefix:
-            if prefix not in column_prefixes:
-                column_prefixes[prefix] = []
-            column_prefixes[prefix].append(col)
-    
-    # Add normalized optional columns to the canonical headers
-    for prefix in sorted(column_prefixes.keys()):
-        # If there's only one column with this prefix, use the original name
-        if len(column_prefixes[prefix]) == 1:
-            canonical_headers.append(column_prefixes[prefix][0])
-        else:
-            # Otherwise, standardize to just the prefix (like "AH" for "AH1", "AH2", etc.)
-            canonical_headers.append(prefix)
-    
+    optional_cols = [
+        col
+        for col in headers
+        if col not in metadata_cols
+        and col not in mandatory_cols
+        and col not in final_cols
+    ]
+
+    # Sort optional columns alphabetically and add them to canonical headers
+    canonical_headers.extend(sorted(optional_cols))
+
     # Add final columns that exist
-    canonical_headers.extend([col for col in final_cols if col in all_columns])
-    
-    logger.debug(f"Generated canonical headers: {canonical_headers}")
-    
+    canonical_headers.extend([col for col in final_cols if col in headers])
+
     return canonical_headers
 
 
@@ -147,8 +141,8 @@ def filter_csv_data(content: str) -> Tuple[str, Dict[str, str]]:
 
 def merge_csv_data(existing_content: str, new_content: str) -> str:
     """
-    Merge new CSV content with existing content, handling potential header differences.
-    Properly handles quoted fields with commas.
+    Fallback merge function for CSV content when Polars merge fails.
+    Handles quoted fields with commas correctly.
     """
     # Parse existing content
     existing_reader = csv.reader(
@@ -184,53 +178,39 @@ def merge_csv_data(existing_content: str, new_content: str) -> str:
         writer.writerows(new_data)
         return output.getvalue()
 
-    logger.info(f"Merging headers: \n old: {existing_header} \n new: {new_header}")
+    # Combine all unique headers
+    all_headers = list(
+        dict.fromkeys(
+            existing_header + [col for col in new_header if col not in existing_header]
+        )
+    )
 
-    # Generate canonical headers
-    canonical_header = get_canonical_headers(existing_header, new_header)
-    
-    # Create mapping from original columns to canonical columns
-    existing_map = {}
-    for col in existing_header:
-        prefix = ''.join([c for c in col if c.isalpha()])
-        if prefix and prefix in canonical_header and prefix != col:
-            existing_map[col] = prefix
-        else:
-            existing_map[col] = col
-    
-    new_map = {}
-    for col in new_header:
-        prefix = ''.join([c for c in col if c.isalpha()])
-        if prefix and prefix in canonical_header and prefix != col:
-            new_map[col] = prefix
-        else:
-            new_map[col] = col
-    
-    # Create reverse mappings for data access
-    existing_index_map = {existing_map.get(col, col): i for i, col in enumerate(existing_header)}
-    new_index_map = {new_map.get(col, col): i for i, col in enumerate(new_header)}
+    # Get canonical ordering
+    canonical_headers = get_canonical_headers(all_headers)
 
-    # Map existing data to canonical headers
+    # Create index mappings for the original headers
+    existing_indices = {col: i for i, col in enumerate(existing_header)}
+    new_indices = {col: i for i, col in enumerate(new_header)}
+
+    # Function to map a row to the canonical headers
+    def map_row_to_canonical(row, indices):
+        new_row = [""] * len(canonical_headers)
+        for i, col in enumerate(canonical_headers):
+            if col in indices and indices[col] < len(row):
+                new_row[i] = row[indices[col]]
+        return new_row
+
+    # Map all rows to the canonical headers
     merged_data = []
     for row in existing_data:
-        new_row = [""] * len(canonical_header)
-        for i, col in enumerate(canonical_header):
-            if col in existing_index_map and existing_index_map[col] < len(row):
-                new_row[i] = row[existing_index_map[col]]
-        merged_data.append(new_row)
-
-    # Map new data to canonical headers
+        merged_data.append(map_row_to_canonical(row, existing_indices))
     for row in new_data:
-        new_row = [""] * len(canonical_header)
-        for i, col in enumerate(canonical_header):
-            if col in new_index_map and new_index_map[col] < len(row):
-                new_row[i] = row[new_index_map[col]]
-        merged_data.append(new_row)
+        merged_data.append(map_row_to_canonical(row, new_indices))
 
     # Write the merged data
     output = io.StringIO()
     writer = csv.writer(output, quotechar='"', quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(canonical_header)
+    writer.writerow(canonical_headers)
     writer.writerows(merged_data)
 
     return output.getvalue()
@@ -240,67 +220,51 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
     """
     Merge CSV content using Polars for better performance.
     Handles quoted fields with internal commas correctly.
-    Includes detailed logging for performance monitoring.
     """
-    logger.debug("Starting Polars CSV merge operation")
-    start_time = time.time()
 
-    # Parse CSV content with proper quote handling first
+    # Parse CSV content using Polars' native CSV reader
     def parse_csv_for_polars(content, source_name):
-
         try:
-            # Use Python's CSV reader with proper quote handling
-            csv_reader = csv.reader(
-                StringIO(content), quotechar='"', quoting=csv.QUOTE_MINIMAL
-            )
-            rows = list(csv_reader)
-
-            if not rows:
-                logger.warning(f"No data found in {source_name}")
+            if not content.strip():
+                logger.warning(f"Empty content in {source_name}")
                 return None
 
-            columns = rows[0]
-            data_rows = rows[1:]
-
-            if not data_rows:
-                logger.warning(f"No data rows found in {source_name}")
-                return pl.DataFrame(schema=[pl.Field(col, pl.Utf8) for col in columns])
-
-            # Check if any rows have more fields than headers (only log once)
-            max_fields = max(len(row) for row in data_rows)
-            if max_fields > len(columns):
-                # Log just once with a summary instead of for every row
-                logger.info(
-                    f"Some rows in {source_name} have more fields than the header ({max_fields} > {len(columns)}). "
-                )
-
-            # Create a dictionary of columns for Polars
-            data_dict = {col: [] for col in columns}
-
-            for row in data_rows:
-                for i, col in enumerate(columns):
-                    if i < len(row):
-                        data_dict[col].append(row[i])
-                    else:
-                        data_dict[col].append("")
-
-            # Create DataFrame with explicit string type
-            return pl.DataFrame(data_dict).select(
-                [pl.col(col).cast(pl.Utf8) for col in columns]
+            # Use Polars' native CSV parser with proper settings
+            df = pl.read_csv(
+                StringIO(content),
+                has_header=True,
+                quote_char='"',
+                ignore_errors=True,
+                infer_schema_length=0,  # Don't infer schema types
+                try_parse_dates=False,  # We'll handle dates explicitly
             )
 
+            # Cast all columns to strings except DATE
+            if "DATE" in df.columns:
+                # Parse DATE column to datetime and format it back to standard format
+                df = df.with_columns(
+                    [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                )
+
+            # Fill nulls with empty strings for all string columns
+            non_date_cols = [col for col in df.columns if col != "DATE"]
+            if non_date_cols:
+                df = df.with_columns(
+                    [pl.col(non_date_cols).fill_null("").cast(pl.Utf8)]
+                )
+
+            if df.shape[0] == 0:
+                logger.warning(f"No data rows found in {source_name}")
+
+            return df
+
         except Exception as e:
-            logger.error(f"Error parsing {source_name}: {e}")
+            logger.error(f"Error parsing {source_name} with Polars: {e}")
             return None
 
     try:
         # Parse CSV files with proper quote handling
-        parse_start = time.time()
         existing_df = parse_csv_for_polars(existing_content, "existing file")
-        parse_time = time.time() - parse_start
-        logger.debug(
-            f"Parsed existing content ({len(existing_content)} bytes) in {parse_time:.2f}s"
-        )
 
         if existing_df is None:
             logger.warning(
@@ -308,80 +272,35 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
             )
             return merge_csv_data(existing_content, new_content)
 
-        parse_start = time.time()
         new_df = parse_csv_for_polars(new_content, "new file")
-        parse_time = time.time() - parse_start
-        logger.debug(
-            f"Parsed new content ({len(new_content)} bytes) in {parse_time:.2f}s"
-        )
 
         if new_df is None:
             logger.warning("Failed to parse new file, falling back to standard merge")
             return merge_csv_data(existing_content, new_content)
 
-        # Get column information for both dataframes
-        existing_cols = existing_df.columns
-        new_cols = new_df.columns
+        # Merge and process dataframes in one chain of operations
+        merged_df = (
+            pl.concat([existing_df, new_df], how="diagonal").unique().fill_null("")
+        )
 
-        # Process and normalize column headers
-        canonical_headers = get_canonical_headers(existing_cols, new_cols)
-        
-        # Create column mapping for existing dataframe
-        existing_col_map = {}
-        for col in existing_cols:
-            prefix = ''.join([c for c in col if c.isalpha()])
-            if prefix and prefix in canonical_headers and prefix != col:
-                # Map from original column to standardized prefix
-                existing_col_map[col] = prefix
-        
-        # Create column mapping for new dataframe
-        new_col_map = {}
-        for col in new_cols:
-            prefix = ''.join([c for c in col if c.isalpha()])
-            if prefix and prefix in canonical_headers and prefix != col:
-                # Map from original column to standardized prefix
-                new_col_map[col] = prefix
-        
-        # Rename columns in existing dataframe
-        if existing_col_map:
-            existing_df = existing_df.rename(existing_col_map)
-        
-        # Rename columns in new dataframe
-        if new_col_map:
-            new_df = new_df.rename(new_col_map)
-        
-        # Add missing columns to each dataframe
-        for col in canonical_headers:
-            if col not in existing_df.columns:
-                existing_df = existing_df.with_columns(pl.lit("").cast(pl.Utf8).alias(col))
-            if col not in new_df.columns:
-                new_df = new_df.with_columns(pl.lit("").cast(pl.Utf8).alias(col))
-        
-        # Ensure both dataframes have the same column ordering
-        existing_df = existing_df.select([pl.col(col).cast(pl.Utf8) for col in canonical_headers])
-        new_df = new_df.select([pl.col(col).cast(pl.Utf8) for col in canonical_headers])
+        # Get canonical headers and reorder columns
+        canonical_headers = get_canonical_headers(merged_df.columns)
+        merged_df = merged_df.select([pl.col(col) for col in canonical_headers])
 
-        # Concatenate dataframes
-        merge_start = time.time()
-        merged_df = pl.concat([existing_df, new_df])
+        # Format DATE column back to string with ISO format before writing
+        if "DATE" in merged_df.columns:
+            merged_df = merged_df.with_columns(
+                [pl.col("DATE").dt.strftime("%Y-%m-%dT%H:%M:%S")]
+            )
 
-        # Deduplicate if needed
-        if merged_df.shape[0] > existing_df.shape[0] + new_df.shape[0]:
-            logger.debug("Potential duplicates detected, performing deduplication")
-            merged_df = merged_df.unique()
-
-        merge_time = time.time() - merge_start
-        logger.debug(f"Merged dataframes in {merge_time:.2f}s")
+        # Cast all columns to strings to ensure consistent output
+        merged_df = merged_df.select(
+            [pl.col(col).cast(pl.Utf8) for col in merged_df.columns]
+        )
 
         # Convert back to CSV with proper quoting
-        csv_start = time.time()
         output = io.StringIO()
         merged_df.write_csv(output, quote_style="necessary")
-        csv_time = time.time() - csv_start
-        logger.debug(f"Converted to CSV in {csv_time:.2f}s")
-
-        total_time = time.time() - start_time
-        logger.debug(f"Total Polars merge operation completed in {total_time:.2f}s")
 
         return output.getvalue()
 

@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from config import DATA_DIR, RAW_DIR, MERGED_DIR
 from csv_merger import merge_csv_data_with_polars
-from metadata_manager import update_metadata_file
 
 logger = logging.getLogger("weather_processor")
 
@@ -63,9 +62,7 @@ def write_station_data_to_disk(
                 ) as f:
                     existing_content = f.read()
 
-                merged_content = merge_csv_data_with_polars(
-                    existing_content, content
-                )
+                merged_content = merge_csv_data_with_polars(existing_content, content)
 
                 # Write back merged content
                 with gzip.open(station_path, "wt", encoding="utf-8") as f:
@@ -109,7 +106,3 @@ def write_station_data_to_disk(
 
             except Exception as e:
                 logger.error(f"Error creating new station file {station_id}: {e}")
-
-        # Update metadata in memory but don't write to disk yet
-        # Set write_to_disk=False to accumulate changes
-        update_metadata_file(station_id, metadata, write_to_disk=False)

@@ -1,216 +1,512 @@
 #!/usr/bin/env python3
 """
-Functions for managing station metadata in the weather data processor.
+SQLite-based metadata manager for the NOAA weather data processor.
+Provides atomic updates and efficient concurrent access.
 """
+import sqlite3
 import csv
 import uuid
 import logging
+import threading
 import shutil
 import tarfile
+import time
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
+from contextlib import contextmanager
 from tqdm import tqdm
 
-from config import MERGED_DIR, METADATA_FIELDS, METADATA_BATCH_SIZE
+from config import MERGED_DIR, METADATA_FIELDS
 from utils import safe_read_from_tar
 
 logger = logging.getLogger("weather_processor")
 
+# Database file path
+DB_PATH = MERGED_DIR / "wx_metadata.db"
+LEGACY_CSV_PATH = MERGED_DIR / "wx_info.csv"
 
-def load_metadata_file() -> Tuple[List[str], Dict[str, List[str]]]:
+# Thread-local storage for database connections
+_thread_local = threading.local()
+
+# Schema version
+SCHEMA_VERSION = 1
+
+# Lock for schema initialization
+_init_lock = threading.Lock()
+_db_semaphore = threading.Semaphore(3)  # Limit concurrent DB operations
+_is_initialized = False
+
+
+@contextmanager
+def get_db_connection():
     """
-    Load existing metadata file.
-    Returns (headers, metadata_dict)
+    Get a database connection for the current thread.
+    Uses thread-local storage to maintain separate connections per thread.
+    Uses a semaphore to limit concurrent database operations.
     """
-    metadata_path = MERGED_DIR / "wx_info.csv"
-    headers = METADATA_FIELDS
-    metadata_dict = {}
+    global _is_initialized
 
-    if metadata_path.exists():
-        try:
-            with open(
-                metadata_path, "r", encoding="utf-8", newline="", errors="replace"
-            ) as f:
-                reader = csv.reader(f)
-                headers = next(reader, METADATA_FIELDS)
+    # If not initialized, initialize first
+    if not _is_initialized:
+        _initialize_database_internal()
 
-                for row in reader:
-                    if row and len(row) > 0:
-                        station_id = row[0]
-                        # Pad row if it's shorter than headers
-                        while len(row) < len(headers):
-                            row.append("")
-                        metadata_dict[station_id] = row
-        except Exception as e:
-            logger.error(f"Error reading metadata file: {e}", exc_info=True)
-            # Create a backup of the corrupted file
-            backup_path = metadata_path.with_suffix(".csv.bak")
-            if metadata_path.exists():
-                shutil.copy(metadata_path, backup_path)
-                logger.info(
-                    f"Created backup of corrupted metadata file at {backup_path}"
-                )
-
-    return headers, metadata_dict
-
-
-def save_metadata_file(headers: List[str], metadata_dict: Dict[str, List[str]]):
-    """
-    Save metadata to file with error handling.
-    """
-    metadata_path = MERGED_DIR / "wx_info.csv"
-
-    # Create a temporary file first
-    temp_path = MERGED_DIR / f"wx_info_temp_{uuid.uuid4()}.csv"
+    # Acquire semaphore with timeout to prevent deadlocks
+    if not _db_semaphore.acquire(timeout=60):  # 60 second timeout
+        logger.warning(
+            "Failed to acquire database semaphore after 60 seconds, proceeding anyway"
+        )
 
     try:
-        with open(temp_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-            writer.writerow(headers)
+        # Check if we already have a connection for this thread
+        if not hasattr(_thread_local, "connection"):
+            # Create a new connection for this thread
+            _thread_local.connection = sqlite3.connect(
+                DB_PATH,
+                timeout=30.0,  # Increased from 10 to 30 seconds
+                isolation_level=None,  # Use autocommit mode
+            )
+            # Enable foreign keys
+            _thread_local.connection.execute("PRAGMA foreign_keys = ON")
 
-            for station_id in sorted(metadata_dict.keys()):
-                row = metadata_dict[station_id]
-                # Ensure row has same length as headers
-                while len(row) < len(headers):
-                    row.append("")
-                writer.writerow(row)
+            # Set busy timeout - increased to 30 seconds
+            _thread_local.connection.execute("PRAGMA busy_timeout = 30000")
 
-        # If we get here, writing was successful, replace the old file
-        if metadata_path.exists():
-            metadata_path.unlink()
-        temp_path.rename(metadata_path)
+            # Use write-ahead logging for better concurrency
+            _thread_local.connection.execute("PRAGMA journal_mode = WAL")
+
+        try:
+            yield _thread_local.connection
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                # Implement retry logic with exponential backoff
+                retry_count = 0
+                max_retries = 5
+                while retry_count < max_retries:
+                    retry_count += 1
+                    wait_time = (
+                        2**retry_count
+                    )  # Exponential backoff: 2, 4, 8, 16, 32 seconds
+                    logger.warning(
+                        f"Database locked, retrying in {wait_time} seconds (attempt {retry_count}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    try:
+                        yield _thread_local.connection
+                        return  # Success, exit the retry loop
+                    except sqlite3.OperationalError as retry_e:
+                        if (
+                            retry_count == max_retries
+                            or "database is locked" not in str(retry_e)
+                        ):
+                            logger.error(
+                                f"Database error after retries: {retry_e}",
+                                exc_info=True,
+                            )
+                            raise
+            else:
+                # Other database errors
+                logger.error(f"Database error: {e}", exc_info=True)
+                raise
+    finally:
+        # Always release the semaphore
+        _db_semaphore.release()
+
+
+def initialize_database():
+    """
+    Initialize the SQLite database with the required schema.
+    Thread-safe and only runs once.
+    """
+    global _is_initialized
+
+    # Check if we need to initialize
+    if _is_initialized:
+        return
+
+    _initialize_database_internal()
+
+
+def _initialize_database_internal():
+    """
+    Internal function to handle database initialization.
+    This avoids the circular dependency between get_db_connection and initialize_database.
+    """
+    global _is_initialized
+
+    with _init_lock:
+        # Check again inside the lock
+        if _is_initialized:
+            return
+
+        # Make sure the parent directory exists
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        create_new = not DB_PATH.exists()
+
+        # Create a direct connection for initialization without get_db_connection
+        conn = sqlite3.connect(DB_PATH, timeout=30.0, isolation_level=None)
+
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 10000")
+            conn.execute("PRAGMA journal_mode = WAL")
+
+            cursor = conn.cursor()
+
+            # Get current schema version if database exists
+            if not create_new:
+                try:
+                    cursor.execute(
+                        "SELECT value FROM metadata_settings WHERE key = 'schema_version'"
+                    )
+                    result = cursor.fetchone()
+                    current_version = int(result[0]) if result else 0
+                except sqlite3.OperationalError:
+                    # Table doesn't exist yet - treat as new
+                    current_version = 0
+                    create_new = True
+            else:
+                current_version = 0
+
+            # Create tables if needed
+            if create_new or current_version < SCHEMA_VERSION:
+                logger.info(f"Initializing metadata database (v{SCHEMA_VERSION})")
+
+                # Settings table
+                cursor.execute(
+                    """
+                CREATE TABLE IF NOT EXISTS metadata_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                """
+                )
+
+                # Stations table
+                cursor.execute(
+                    """
+                CREATE TABLE IF NOT EXISTS stations (
+                    station_id TEXT PRIMARY KEY,
+                    latitude TEXT,
+                    longitude TEXT,
+                    elevation TEXT,
+                    name TEXT,
+                    call_sign TEXT,
+                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+                )
+
+                # Year counts table with foreign key to stations
+                cursor.execute(
+                    """
+                CREATE TABLE IF NOT EXISTS year_counts (
+                    station_id TEXT,
+                    year TEXT,
+                    observation_count INTEGER,
+                    PRIMARY KEY (station_id, year),
+                    FOREIGN KEY (station_id) REFERENCES stations(station_id) ON DELETE CASCADE
+                )
+                """
+                )
+
+                # Create index on year for efficient filtering
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_year_counts_year ON year_counts(year)"
+                )
+
+                # Set schema version
+                cursor.execute(
+                    "INSERT OR REPLACE INTO metadata_settings (key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
+
+                # Import existing metadata if available
+                if LEGACY_CSV_PATH.exists():
+                    # Close this connection first to avoid locks
+                    conn.close()
+                    import_from_csv(LEGACY_CSV_PATH)
+                    # Reconnect after import
+                    conn = sqlite3.connect(DB_PATH, timeout=30.0, isolation_level=None)
+
+                logger.info("Database initialization complete")
+
+            _is_initialized = True
+
+        finally:
+            # Ensure connection is closed
+            conn.close()
+
+
+def import_from_csv(csv_path: Path):
+    """
+    Import metadata from the legacy CSV file.
+    """
+    logger.info(f"Importing metadata from {csv_path}")
+
+    try:
+        with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            headers = next(reader, METADATA_FIELDS)
+
+            # Identify which columns correspond to metadata fields vs year counts
+            metadata_indices = {}
+            year_indices = {}
+
+            for i, header in enumerate(headers):
+                if header in METADATA_FIELDS:
+                    metadata_indices[header] = i
+                elif header.isdigit():  # Year columns
+                    year_indices[header] = i
+
+            # Process rows using efficient batch inserts
+            batch_size = 1000
+            stations_batch = []
+            year_counts_batch = []
+
+            for row in reader:
+                if not row or len(row) == 0 or not row[0]:
+                    continue
+
+                station_id = row[0]
+
+                # Extract station metadata
+                station_data = [
+                    station_id,
+                    (
+                        row[metadata_indices.get("LATITUDE", 0)]
+                        if "LATITUDE" in metadata_indices
+                        else ""
+                    ),
+                    (
+                        row[metadata_indices.get("LONGITUDE", 0)]
+                        if "LONGITUDE" in metadata_indices
+                        else ""
+                    ),
+                    (
+                        row[metadata_indices.get("ELEVATION", 0)]
+                        if "ELEVATION" in metadata_indices
+                        else ""
+                    ),
+                    (
+                        row[metadata_indices.get("NAME", 0)]
+                        if "NAME" in metadata_indices
+                        else ""
+                    ),
+                    (
+                        row[metadata_indices.get("CALL_SIGN", 0)]
+                        if "CALL_SIGN" in metadata_indices
+                        else ""
+                    ),
+                ]
+
+                stations_batch.append(station_data)
+
+                # Extract year counts
+                for year, idx in year_indices.items():
+                    if idx < len(row) and row[idx]:
+                        try:
+                            count = int(row[idx])
+                            year_counts_batch.append((station_id, year, count))
+                        except ValueError:
+                            pass
+
+                # Execute batch insert if batch is full
+                if len(stations_batch) >= batch_size:
+                    with get_db_connection() as conn:
+                        # Insert stations
+                        conn.executemany(
+                            """
+                            INSERT OR REPLACE INTO stations 
+                            (station_id, latitude, longitude, elevation, name, call_sign)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            stations_batch,
+                        )
+
+                        # Insert year counts
+                        if year_counts_batch:
+                            conn.executemany(
+                                """
+                                INSERT OR REPLACE INTO year_counts
+                                (station_id, year, observation_count)
+                                VALUES (?, ?, ?)
+                                """,
+                                year_counts_batch,
+                            )
+
+                    # Clear batches
+                    stations_batch = []
+                    year_counts_batch = []
+
+            # Insert any remaining rows
+            if stations_batch:
+                with get_db_connection() as conn:
+                    # Insert stations
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO stations 
+                        (station_id, latitude, longitude, elevation, name, call_sign)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        stations_batch,
+                    )
+
+                    # Insert year counts
+                    if year_counts_batch:
+                        conn.executemany(
+                            """
+                            INSERT OR REPLACE INTO year_counts
+                            (station_id, year, observation_count)
+                            VALUES (?, ?, ?)
+                            """,
+                            year_counts_batch,
+                        )
+
+            logger.info(f"Imported metadata for {len(stations_batch)} stations")
 
     except Exception as e:
-        logger.error(f"Error saving metadata file: {e}", exc_info=True)
-        if temp_path.exists():
-            temp_path.unlink()
+        logger.error(f"Error importing from CSV: {e}", exc_info=True)
 
 
-def update_metadata_file(
-    station_id: str, metadata: Dict[str, str], write_to_disk=False
-):
+def update_station_metadata(station_id: str, metadata: Dict[str, str]):
     """
-    Update the wx_info.csv metadata file with station information.
-    Only updates if the station doesn't exist or if metadata has changed.
-    By default, only accumulates updates in memory without writing to disk.
+    Update metadata for a single station.
+    Efficiently handles concurrent updates with SQLite's ACID properties.
 
     Args:
         station_id: Station ID to update
         metadata: Dictionary of metadata values
-        write_to_disk: Whether to write changes to disk immediately
     """
-    # Use a static variable to track all pending updates
-    if not hasattr(update_metadata_file, "pending_updates"):
-        update_metadata_file.pending_updates = {}
-        update_metadata_file.headers = None
-        update_metadata_file.metadata_dict = None
+    try:
+        # Prepare values
+        values = (
+            station_id,
+            metadata.get("LATITUDE", ""),
+            metadata.get("LONGITUDE", ""),
+            metadata.get("ELEVATION", ""),
+            metadata.get("NAME", ""),
+            metadata.get("CALL_SIGN", ""),
+        )
 
-    # Add this update to pending
-    update_metadata_file.pending_updates[station_id] = metadata
+        # Use upsert pattern for atomic update
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO stations 
+                (station_id, latitude, longitude, elevation, name, call_sign)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(station_id) DO UPDATE SET
+                    latitude = CASE WHEN excluded.latitude != '' THEN excluded.latitude ELSE latitude END,
+                    longitude = CASE WHEN excluded.longitude != '' THEN excluded.longitude ELSE longitude END,
+                    elevation = CASE WHEN excluded.elevation != '' THEN excluded.elevation ELSE elevation END,
+                    name = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
+                    call_sign = CASE WHEN excluded.call_sign != '' THEN excluded.call_sign ELSE call_sign END,
+                    last_modified = CURRENT_TIMESTAMP
+                """,
+                values,
+            )
 
-    # Load metadata if needed
-    if (
-        update_metadata_file.headers is None
-        or update_metadata_file.metadata_dict is None
-    ):
-        headers, metadata_dict = load_metadata_file()
-        update_metadata_file.headers = headers
-        update_metadata_file.metadata_dict = metadata_dict
-
-    # If requested to write immediately (legacy behavior), process and save
-    if (
-        write_to_disk
-        and len(update_metadata_file.pending_updates) >= METADATA_BATCH_SIZE
-    ):
-        flush_metadata_updates()
+    except Exception as e:
+        logger.error(
+            f"Error updating station {station_id} metadata: {e}", exc_info=True
+        )
 
 
-def flush_metadata_updates():
+def update_station_year_count(station_id: str, year: str, count: int):
     """
-    Process all pending metadata updates and write to disk.
-    Returns the number of stations updated.
+    Update observation count for a station in a specific year.
+
+    Args:
+        station_id: Station ID
+        year: Year as string (e.g., "2015")
+        count: Number of observations
     """
-    if (
-        not hasattr(update_metadata_file, "pending_updates")
-        or not update_metadata_file.pending_updates
-    ):
-        return 0
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO year_counts (station_id, year, observation_count)
+                VALUES (?, ?, ?)
+                ON CONFLICT(station_id, year) DO UPDATE SET
+                    observation_count = excluded.observation_count
+                """,
+                (station_id, year, count),
+            )
+    except Exception as e:
+        logger.error(
+            f"Error updating year count for {station_id}, {year}: {e}", exc_info=True
+        )
 
-    # Make sure metadata is loaded
-    if (
-        update_metadata_file.headers is None
-        or update_metadata_file.metadata_dict is None
-    ):
-        headers, metadata_dict = load_metadata_file()
-        update_metadata_file.headers = headers
-        update_metadata_file.metadata_dict = metadata_dict
-    else:
-        headers = update_metadata_file.headers
-        metadata_dict = update_metadata_file.metadata_dict
 
-    # Track stations that were added or updated
-    new_stations = []
-    updated_stations = []
+def update_batch_year_counts(counts_data: List[Tuple[str, str, int]]):
+    """
+    Update multiple year counts in a batch operation.
+    Much more efficient than individual updates.
 
-    # Process all pending updates
-    for sid, meta in update_metadata_file.pending_updates.items():
-        # Create row from metadata
-        new_row = [meta.get(field, "") for field in METADATA_FIELDS]
+    Args:
+        counts_data: List of (station_id, year, count) tuples
+    """
+    if not counts_data:
+        return
 
-        # Set station ID
-        new_row[0] = sid
+    try:
+        with get_db_connection() as conn:
+            conn.execute("BEGIN TRANSACTION")
 
-        # Check if update is needed
-        if sid not in metadata_dict:
-            metadata_dict[sid] = new_row
-            new_stations.append(sid)
-        else:
-            existing_row = metadata_dict[sid]
-            # Copy existing year counts (if any)
-            for i in range(len(METADATA_FIELDS), min(len(existing_row), len(headers))):
-                if i < len(headers) and i < len(existing_row):
-                    if len(new_row) <= i:
-                        new_row.append(existing_row[i])
-                    else:
-                        new_row[i] = existing_row[i]
+            # Use executemany for efficiency
+            conn.executemany(
+                """
+                INSERT INTO year_counts (station_id, year, observation_count)
+                VALUES (?, ?, ?)
+                ON CONFLICT(station_id, year) DO UPDATE SET
+                    observation_count = excluded.observation_count
+                """,
+                counts_data,
+            )
 
-            # Only update if metadata has changed
-            metadata_changed = False
-            for i in range(min(len(new_row), len(existing_row))):
-                if (
-                    i < len(METADATA_FIELDS)
-                    and new_row[i] != existing_row[i]
-                    and new_row[i]
-                ):
-                    metadata_changed = True
-                    break
+            conn.execute("COMMIT")
+    except Exception as e:
+        logger.error(f"Error batch updating year counts: {e}", exc_info=True)
 
-            if metadata_changed:
-                metadata_dict[sid] = new_row
-                updated_stations.append(sid)
 
-    # Log summary messages and save if changes were made
-    if new_stations or updated_stations:
-        if new_stations:
-            logger.info(f"Added {len(new_stations)} new stations to metadata")
-            logger.debug(f"New stations: {', '.join(new_stations)}")
+def get_all_station_metadata() -> Dict[str, Dict[str, str]]:
+    """
+    Get metadata for all stations.
 
-        if updated_stations:
-            logger.info(f"Updated metadata for {len(updated_stations)} stations")
-            logger.debug(f"Updated stations: {', '.join(updated_stations)}")
+    Returns:
+        Dictionary mapping station_id to metadata dictionary
+    """
+    result = {}
 
-        save_metadata_file(headers, metadata_dict)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT station_id, latitude, longitude, elevation, name, call_sign
+                FROM stations
+                """
+            )
 
-    # Clear pending updates
-    update_count = len(new_stations) + len(updated_stations)
-    update_metadata_file.pending_updates = {}
+            for row in cursor:
+                station_id, lat, lon, elev, name, call_sign = row
+                result[station_id] = {
+                    "STATION": station_id,
+                    "LATITUDE": lat,
+                    "LONGITUDE": lon,
+                    "ELEVATION": elev,
+                    "NAME": name,
+                    "CALL_SIGN": call_sign,
+                }
+    except Exception as e:
+        logger.error(f"Error getting station metadata: {e}", exc_info=True)
 
-    return update_count
+    return result
 
 
 def count_observations_by_year(
-    all_archives: List[Path], stations: Set[str] = None
+    all_archives: List[Path], stations: Optional[Set[str]] = None
 ) -> Tuple[Dict[str, Dict[str, int]], List[str]]:
     """
     Count observations for each station by year.
@@ -227,7 +523,8 @@ def count_observations_by_year(
     for archive in tqdm(
         all_archives, desc="Counting observations by year", unit="archive"
     ):
-        year = archive.stem
+        # Extract just the year part from the filename (remove .tar.gz)
+        year = archive.stem.split(".")[0]
         if not year.isdigit():
             continue
 
@@ -261,9 +558,11 @@ def count_observations_by_year(
     return observations, sorted(years)
 
 
-def update_year_counts(all_archives: List[Path], updated_stations: Set[str] = None):
+def update_year_counts(
+    all_archives: List[Path], updated_stations: Optional[Set[str]] = None
+):
     """
-    Update the year counts in the wx_info.csv file.
+    Update the year counts in the metadata database.
 
     Args:
         all_archives: List of paths to tar.gz archives
@@ -273,181 +572,265 @@ def update_year_counts(all_archives: List[Path], updated_stations: Set[str] = No
         logger.info("No stations updated, skipping year count update")
         return
 
-    metadata_path = MERGED_DIR / "wx_info.csv"
-    if not metadata_path.exists():
-        logger.warning("Metadata file doesn't exist, cannot update year counts")
-        return
-
-    # Load existing metadata
-    headers, metadata_dict = load_metadata_file()
-
-    # Get the years from the archives
-    archive_years = set()
-    for archive in all_archives:
-        year = archive.stem
-        if year.isdigit():
-            archive_years.add(year)
-
-    # Create updated headers with years
-    updated_headers = headers.copy()
-    for year in sorted(archive_years):
-        if year not in headers:
-            updated_headers.append(year)
-
     # Get observation counts
     logger.info("Counting observations by year...")
     observations, years = count_observations_by_year(all_archives, updated_stations)
 
-    # Update metadata with year counts
-    updates_made = False
+    # Prepare data for batch update
+    counts_data = []
     for station_id, year_counts in observations.items():
-        if station_id in metadata_dict:
-            row = metadata_dict[station_id]
+        for year, count in year_counts.items():
+            counts_data.append((station_id, year, count))
 
-            # Extend row if needed
-            while len(row) < len(updated_headers):
-                row.append("")
+    # Update in batches
+    if counts_data:
+        logger.info(
+            f"Updating year counts for {len(observations)} stations across {len(years)} years"
+        )
 
-            # Update year counts
-            for year, count in year_counts.items():
-                if year in updated_headers:
-                    year_idx = updated_headers.index(year)
-                    if year_idx >= len(row):
-                        # Extend row to accommodate the year column
-                        row.extend([""] * (year_idx - len(row) + 1))
+        # Process in batches of 5000 to avoid SQLite limits
+        batch_size = 5000
+        for i in range(0, len(counts_data), batch_size):
+            batch = counts_data[i : i + batch_size]
+            update_batch_year_counts(batch)
 
-                    # Only update if count is different
-                    if str(row[year_idx]) != str(count):
-                        row[year_idx] = str(count)
-                        updates_made = True
-
-            metadata_dict[station_id] = row
-
-    # Write updated metadata only if changes were made
-    if updates_made:
-        logger.info("Saving updated station observation counts to metadata file")
-        save_metadata_file(updated_headers, metadata_dict)
+        logger.info("Year counts update completed")
     else:
-        logger.info("No changes to observation counts, metadata file not updated")
+        logger.info("No year counts to update")
 
 
-def recover_corrupted_metadata():
+def update_metadata_with_counts(observation_counts: Dict[str, Dict[str, int]]) -> bool:
     """
-    Attempt to recover corrupted metadata file by parsing it line by line.
-    This function tries to rebuild the metadata file if it's corrupted.
+    Update metadata with observation counts.
+
+    Args:
+        observation_counts: Dictionary mapping station_id -> year -> count
+
+    Returns:
+        True if update succeeded, False otherwise
     """
-    metadata_path = MERGED_DIR / "wx_info.csv"
-    if not metadata_path.exists():
-        return False
-
-    backup_path = metadata_path.with_suffix(".csv.bak")
-    recovery_path = metadata_path.with_suffix(".csv.recovered")
-
-    # Create a backup if it doesn't exist
-    if not backup_path.exists():
-        try:
-            shutil.copy(metadata_path, backup_path)
-            logger.info(f"Created backup of metadata file at {backup_path}")
-        except Exception as e:
-            logger.error(f"Failed to create backup: {e}")
-
     try:
-        # Read the file line by line and skip corrupt lines
-        valid_lines = []
-        headers = None
+        # Convert to list of tuples for batch update
+        counts_data = []
+        for station_id, year_counts in observation_counts.items():
+            for year, count in year_counts.items():
+                counts_data.append((station_id, year, count))
 
-        with open(metadata_path, "r", encoding="utf-8", errors="replace") as f:
-            for i, line in enumerate(f):
-                # Remove NULL bytes
-                clean_line = line.replace("\0", "")
-                if i == 0:
-                    # This is the header line
-                    headers = clean_line.strip()
-                    valid_lines.append(headers)
-                else:
-                    # Check if this is a valid row
-                    try:
-                        # Simple check: does it have roughly the right number of commas?
-                        comma_count = clean_line.count(",")
-                        expected_commas = headers.count(",")
+        # Update in batches
+        if counts_data:
+            logger.info(
+                f"Updating observation counts for {len(observation_counts)} stations"
+            )
 
-                        if (
-                            comma_count >= expected_commas - 3
-                            and comma_count <= expected_commas + 3
-                        ):
-                            valid_lines.append(clean_line.strip())
-                    except Exception:
-                        # Skip lines that cause parsing errors
-                        continue
+            # Process in batches of 1000 to avoid SQLite limits (reduced from 5000)
+            batch_size = 1000
+            total_batches = (len(counts_data) + batch_size - 1) // batch_size
 
-        # Write the valid lines to the recovery file
-        with open(recovery_path, "w", encoding="utf-8") as f:
-            for line in valid_lines:
-                f.write(line + "\n")
+            for i in range(0, len(counts_data), batch_size):
+                batch = counts_data[i : i + batch_size]
+                batch_num = i // batch_size + 1
 
-        # Replace the original with the recovered version
-        if recovery_path.exists():
-            if metadata_path.exists():
-                metadata_path.unlink()
-            recovery_path.rename(metadata_path)
-            logger.info(f"Recovered metadata file with {len(valid_lines)-1} stations")
+                logger.debug(
+                    f"Processing batch {batch_num}/{total_batches} with {len(batch)} records"
+                )
+                try:
+                    update_batch_year_counts(batch)
+                    logger.debug(f"Completed batch {batch_num}/{total_batches}")
+                except Exception as e:
+                    logger.error(f"Error in batch {batch_num}: {e}", exc_info=True)
+
+            logger.info("Observation counts update completed")
+            return True
+        else:
+            logger.info("No observation counts to update")
             return True
 
     except Exception as e:
-        logger.error(f"Failed to recover metadata file: {e}")
+        logger.error(f"Error updating metadata with counts: {e}", exc_info=True)
+        return False
+
+
+def export_to_csv(output_path: Optional[Path] = None) -> bool:
+    """
+    Export metadata to CSV format.
+    Generates a file compatible with the original format.
+
+    Args:
+        output_path: Optional path for output file. If None, uses the default wx_info.csv path.
+
+    Returns:
+        True if export succeeded, False otherwise
+    """
+    if output_path is None:
+        output_path = LEGACY_CSV_PATH
+
+    temp_path = output_path.with_name(f"wx_info_export_{uuid.uuid4()}.csv")
+
+    try:
+        logger.info(f"Exporting metadata to {output_path}")
+
+        # Get years in ascending order
+        with get_db_connection() as conn:
+            cursor = conn.execute("SELECT DISTINCT year FROM year_counts ORDER BY year")
+            years = [row[0] for row in cursor]
+
+        # Define headers
+        headers = METADATA_FIELDS + years
+
+        # Open output file
+        with open(temp_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(headers)
+
+            # Query all stations and their counts
+            with get_db_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT s.station_id, s.latitude, s.longitude, s.elevation, s.name, s.call_sign
+                    FROM stations s
+                    ORDER BY s.station_id
+                    """
+                )
+
+                batch_size = 1000
+                stations_processed = 0
+
+                while True:
+                    stations_batch = cursor.fetchmany(batch_size)
+                    if not stations_batch:
+                        break
+
+                    for station_row in stations_batch:
+                        station_id = station_row[0]
+
+                        # Create row with metadata
+                        row = list(station_row)
+
+                        # Get year counts for this station
+                        year_cursor = conn.execute(
+                            """
+                            SELECT year, observation_count
+                            FROM year_counts
+                            WHERE station_id = ?
+                            ORDER BY year
+                            """,
+                            (station_id,),
+                        )
+
+                        year_counts = dict(year_cursor.fetchall())
+
+                        # Add year counts to row
+                        for year in years:
+                            row.append(str(year_counts.get(year, "")))
+
+                        # Write row
+                        writer.writerow(row)
+
+                    stations_processed += len(stations_batch)
+                    logger.debug(f"Exported {stations_processed} stations")
+
+        # Rename to final path
+        if output_path.exists():
+            backup_path = output_path.with_suffix(".csv.bak")
+            try:
+                shutil.copy(output_path, backup_path)
+                logger.debug(f"Created backup of existing file: {backup_path}")
+            except Exception as e:
+                logger.warning(f"Failed to create backup: {e}")
+
+            try:
+                output_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove existing file: {e}")
+
+        # Move temp file to final location
+        temp_path.rename(output_path)
+
+        logger.info(f"Exported metadata to {output_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error exporting metadata to CSV: {e}", exc_info=True)
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception as e2:
+                logger.warning(f"Failed to cleanup temp file: {e2}")
+        return False
+
+
+def recover_corrupted_metadata() -> bool:
+    """
+    Attempt to recover corrupted metadata.
+    Since we're using SQLite, this just ensures the DB is properly initialized.
+
+    Returns:
+        True if recovery was successful
+    """
+    try:
+        # Re-initialize database - this will import from CSV if available
+        global _is_initialized
+        _is_initialized = False
+        initialize_database()
+
+        # Perform integrity check
+        with get_db_connection() as conn:
+            cursor = conn.execute("PRAGMA integrity_check")
+            result = cursor.fetchone()[0]
+
+            if result != "ok":
+                logger.error(f"Database integrity check failed: {result}")
+
+                # Try to recover by exporting to CSV, deleting DB and reimporting
+                if export_to_csv():
+                    # Delete database files
+                    DB_PATH.unlink(missing_ok=True)
+                    for related_file in DB_PATH.parent.glob(f"{DB_PATH.name}-*"):
+                        related_file.unlink(missing_ok=True)
+
+                    # Reinitialize
+                    _is_initialized = False
+                    initialize_database()
+
+                    return True
+            else:
+                return True
+
+    except Exception as e:
+        logger.error(f"Error recovering metadata: {e}", exc_info=True)
 
     return False
 
 
-def update_metadata_with_counts(observation_counts: Dict[str, Dict[str, int]]):
+def close_all_connections():
     """
-    Update metadata with observation counts without re-reading archives.
-
-    Args:
-        observation_counts: Dictionary mapping station_id -> year -> count
+    Close all database connections.
+    Call this before program exit.
     """
-    # Load existing metadata
-    headers, metadata_dict = load_metadata_file()
+    if hasattr(_thread_local, "connection"):
+        try:
+            _thread_local.connection.close()
+            delattr(_thread_local, "connection")
+        except Exception as e:
+            logger.warning(f"Error closing database connection: {e}")
 
-    # Get all years from the counts
-    years = set()
-    for station_counts in observation_counts.values():
-        years.update(station_counts.keys())
 
-    # Create updated headers with years
-    updated_headers = headers.copy()
-    for year in sorted(years):
-        if year not in updated_headers:
-            updated_headers.append(year)
+def finalize_metadata():
+    """
+    Perform final tasks before program exit.
+    - Exports to CSV format
+    - Closes database connections
 
-    # Update metadata with counts
-    updates_made = False
-    for station_id, year_counts in observation_counts.items():
-        if station_id in metadata_dict:
-            row = metadata_dict[station_id]
+    Add this to the end of merge_station_data function in processor_core.py.
+    """
+    try:
+        # Export to CSV for compatibility with other tools
+        export_to_csv()
 
-            # Extend row if needed
-            while len(row) < len(updated_headers):
-                row.append("")
+        # Close connections
+        close_all_connections()
 
-            # Update year counts
-            for year, count in year_counts.items():
-                if year in updated_headers:
-                    year_idx = updated_headers.index(year)
-                    if year_idx >= len(row):
-                        row.extend([""] * (year_idx - len(row) + 1))
+        logger.info("Metadata finalization complete")
 
-                    # Only update if count is different or not set
-                    current_count = row[year_idx] if year_idx < len(row) else ""
-                    if not current_count or str(current_count) != str(count):
-                        row[year_idx] = str(count)
-                        updates_made = True
-
-            metadata_dict[station_id] = row
-
-    # Write updated metadata if changes were made
-    if updates_made:
-        logger.info("Saving updated station observation counts to metadata file")
-        save_metadata_file(updated_headers, metadata_dict)
-    else:
-        logger.info("No changes to observation counts, metadata file not updated")
+    except Exception as e:
+        logger.error(f"Error finalizing metadata: {e}", exc_info=True)

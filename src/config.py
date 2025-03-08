@@ -29,8 +29,14 @@ MAX_DOWNLOAD_RETRIES = 3  # Maximum number of download retry attempts
 MAX_DOWNLOAD_THREADS = 4  # Maximum number of concurrent downloads
 
 # Default processing settings
-DEFAULT_MAX_WORKERS = 8  # Default number of parallel processing workers
-METADATA_BATCH_SIZE = 100  # Number of stations to process before writing metadata
+DEFAULT_MAX_WORKERS = 12  # Default number of parallel processing workers
+METADATA_BATCH_SIZE = 1024  # Number of stations to process before writing metadata
+
+# Producer/Consumer pattern settings
+QUEUE_SIZE = 200  # Maximum number of files in the queue
+EXTRACTION_WORKER_NUMBER = 1  # Fixed number of workers to use for extraction
+PROGRESS_LOG_INTERVAL = 100  # Log progress after this many files
+MIN_VALID_LINE_LENGTH = 10  # Minimum length for a valid metadata line
 
 # Logging settings
 LOG_FILE = "weather_data_processing.log"

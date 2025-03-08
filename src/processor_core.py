@@ -3,230 +3,628 @@
 Core functions for processing NOAA weather data archives.
 Implements the main orchestration logic with improved parallelism.
 """
-import logging
-import tarfile
 import concurrent.futures
-import gzip
-import random
 import gc
-import io
+import gzip
+import logging
+import os
+import queue
+import shutil
+import tarfile
+import threading
+import time
 import csv
-from collections import defaultdict
+import io
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
 from threading import Lock
-from typing import Dict, List, Set, Tuple, Optional
-import polars as pl
 from tqdm import tqdm
+import polars as pl
 
-
-from config import MERGED_DIR, IO_BUFFER_SIZE, DEFAULT_MAX_WORKERS
-from file_io import get_station_modified_dates, write_station_data_to_disk
-from verification import should_process_station_file
-from csv_merger import filter_csv_data
-from metadata_manager import flush_metadata_updates, update_metadata_with_counts
+from config import (
+    DEFAULT_MAX_WORKERS,
+    EXTRACTION_WORKER_NUMBER,
+    IO_BUFFER_SIZE,
+    MERGED_DIR,
+    DATA_DIR,
+    PROGRESS_LOG_INTERVAL,
+    QUEUE_SIZE,
+)
+from csv_merger import filter_csv_data, merge_csv_data_with_polars
+from file_io import get_station_modified_dates
+from metadata_manager import (
+    update_station_metadata,
+    update_metadata_with_counts,
+    finalize_metadata,
+)
 from utils import safe_read_from_tar
+from verification import should_process_station_file
 
 logger = logging.getLogger("weather_processor")
 
 
+class StationProcessor:
+    """
+    Manages the producer/consumer pattern for processing station data from archives.
+    """
+
+    def __init__(
+        self,
+        archive_path: Path,
+        max_extraction_workers: int = 1,
+        max_processing_workers: int = 6,
+        queue_size: int = QUEUE_SIZE,
+    ):
+        self.archive_path = archive_path
+        self.max_extraction_workers = max_extraction_workers
+        self.max_processing_workers = max_processing_workers
+        self.queue_size = queue_size
+
+        # Extract just the year (remove .tar from year.tar.gz)
+        self.year = archive_path.stem.split(".")[0]
+
+        # Create temp directory under ../data/temp
+        temp_root = DATA_DIR / "temp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+
+        # Create a unique subdirectory for this process
+        process_temp_dir = f"process_{os.getpid()}_{int(time.time())}"
+        self.temp_dir = temp_root / process_temp_dir
+        self.temp_dir.mkdir(exist_ok=True)
+
+        # Store temp root for cleanup
+        self.temp_root = temp_root
+
+        # Communication mechanisms
+        self.file_queue = queue.Queue(maxsize=queue_size)
+        self.extraction_complete = threading.Event()
+
+        # Thread tracking for safe cleanup
+        self.active_threads = set()
+        self.threads_lock = threading.Lock()
+        self.safe_to_cleanup = threading.Event()
+
+        # Results tracking
+        self.updated_stations = set()
+        self.observation_counts = {}
+        self.results_lock = Lock()
+
+        # Station modification date cache
+        self.station_dates = get_station_modified_dates()
+
+        # Progress tracking
+        self.total_files = 0
+        self.processed_count = 0
+        self.processed_lock = Lock()
+
+    def register_thread(self, thread):
+        """Register a thread for tracking"""
+        with self.threads_lock:
+            self.active_threads.add(thread.ident)
+
+    def unregister_thread(self, thread_id=None):
+        """Unregister a thread when it's done"""
+        thread_id = thread_id or threading.current_thread().ident
+        with self.threads_lock:
+            if thread_id in self.active_threads:
+                self.active_threads.remove(thread_id)
+            # If no more active threads, signal it's safe to clean up
+            if not self.active_threads:
+                self.safe_to_cleanup.set()
+
+    def cleanup(self):
+        """Clean up temporary files and directory"""
+        try:
+            # Wait for all threads to signal they're done
+            if not self.safe_to_cleanup.is_set():
+                logger.info("Waiting for all threads to complete before cleanup...")
+                # Wait indefinitely - since threads are not daemon threads,
+                # they will complete their work even if this takes a while
+                self.safe_to_cleanup.wait()
+                logger.info("All threads have completed, proceeding with cleanup")
+
+            # Give a small delay to ensure all file operations have completed
+            time.sleep(0.5)
+
+            if self.temp_dir.exists():
+                # Try several times to clean up files in case they're still being used
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    success = True
+                    for file in self.temp_dir.iterdir():
+                        try:
+                            file.unlink()
+                        except Exception as e:
+                            success = False
+                            if attempt == max_attempts - 1:  # Only log on last attempt
+                                logger.warning(f"Error removing temp file {file}: {e}")
+
+                    if success:  # If all files were removed successfully
+                        break
+
+                    # Wait a bit before trying again
+                    time.sleep(1)
+
+                # Try to remove the directory
+                try:
+                    if self.temp_dir.exists():
+                        try:
+                            # Try with normal rmdir
+                            self.temp_dir.rmdir()
+                            logger.debug(f"Removed temporary directory {self.temp_dir}")
+                        except OSError:
+                            # If that fails, try with stronger methods
+                            try:
+                                import shutil
+
+                                shutil.rmtree(self.temp_dir, ignore_errors=True)
+                                logger.debug(
+                                    f"Removed temporary directory with rmtree {self.temp_dir}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Could not remove temp dir {self.temp_dir} with rmtree: {e}"
+                                )
+                except Exception as e:
+                    logger.warning(f"Error removing temp dir {self.temp_dir}: {e}")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    def producer_task(self, member_batch):
+        """
+        Extract files from the archive and add to the queue.
+
+        Args:
+            member_batch: List of tar members to extract
+        """
+        try:
+            # Register this thread
+            self.register_thread(threading.current_thread())
+
+            logger.debug(f"Producer starting with {len(member_batch)} files")
+            with tarfile.open(self.archive_path, "r:gz", bufsize=IO_BUFFER_SIZE) as tar:
+                for member in member_batch:
+                    try:
+                        # Extract the file to temp dir
+                        extraction_path = self.temp_dir / Path(member.name).name
+                        tar.extract(member, path=self.temp_dir)
+
+                        # Add to queue
+                        self.file_queue.put(
+                            (extraction_path, member.name, member.mtime)
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Error extracting {member.name}: {e}")
+                        # Skip this file but continue with others
+
+            logger.debug("Producer completed batch extraction")
+
+        except Exception as e:
+            logger.error(f"Producer thread error: {e}", exc_info=True)
+        finally:
+            # Unregister this thread when done
+            self.unregister_thread()
+
+    def process_station_content(
+        self, content: str, station_id: str, mtime: float
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], int]:
+        """
+        Process station content.
+
+        Args:
+            content: The CSV content as a string
+            station_id: The station identifier
+            mtime: Modification time from the archive
+
+        Returns:
+            Tuple of (updated_flag, filtered_content, metadata, observation_count)
+        """
+        try:
+            # Check if we should process this file based on timestamps
+            if not should_process_station_file(station_id, content, mtime):
+                return False, None, None, 0
+
+            # Count observations (number of data rows)
+            count = 0
+            if content:
+                lines = content.splitlines()
+                count = max(0, len(lines) - 1)  # Subtract 1 for header
+
+            # Filter the content to separate metadata and weather data
+            filtered_content, metadata = filter_csv_data(content)
+
+            # Ensure station ID is in metadata
+            metadata["STATION"] = station_id
+
+            return bool(filtered_content), filtered_content, metadata, count
+
+        except Exception as e:
+            logger.error(
+                f"Error processing content for {station_id}: {e}", exc_info=True
+            )
+            return False, None, None, 0
+
+    def write_station_data(
+        self, station_id: str, content: str, metadata: Dict[str, str], count: int
+    ):
+        """
+        Write station data to disk with proper merging.
+
+        Args:
+            station_id: The station identifier
+            content: Filtered CSV content to write
+            metadata: Station metadata
+            count: Observation count
+        """
+        try:
+            # Prepare path
+            station_path = MERGED_DIR / f"{station_id}.csv.gz"
+
+            # Append or create station data file
+            if station_path.exists():
+                try:
+                    # Read existing content
+                    with gzip.open(
+                        station_path, "rt", encoding="utf-8", errors="replace"
+                    ) as f:
+                        existing_content = f.read()
+
+                    merged_content = merge_csv_data_with_polars(
+                        existing_content, content
+                    )
+
+                    # Write back merged content
+                    with gzip.open(station_path, "wt", encoding="utf-8") as f:
+                        f.write(merged_content)
+
+                except Exception as e:
+                    logger.error(
+                        f"Error updating station file {station_id}: {e}", exc_info=True
+                    )
+                    # Create backup of problematic file
+                    if station_path.exists():
+                        backup_path = station_path.with_suffix(".csv.gz.bak")
+                        try:
+                            shutil.copy(station_path, backup_path)
+                            logger.info(
+                                f"Created backup of problematic file at {backup_path}"
+                            )
+                        except Exception as backup_e:
+                            logger.error(f"Failed to create backup: {backup_e}")
+
+                    # Try writing new content directly
+                    try:
+                        with gzip.open(station_path, "wt", encoding="utf-8") as f:
+                            f.write(content)
+                        logger.info(
+                            f"Wrote new content to {station_id} after merge failure"
+                        )
+                    except Exception as write_e:
+                        logger.error(f"Failed to write new content: {write_e}")
+            else:
+                # For new files, write the entire content
+                try:
+                    with gzip.open(station_path, "wt", encoding="utf-8") as f:
+                        f.write(content)
+                except Exception as e:
+                    logger.error(f"Error creating new station file {station_id}: {e}")
+
+            # Update metadata - accumulate changes in memory
+            update_station_metadata(station_id, metadata)
+
+        except Exception as e:
+            logger.error(
+                f"Error writing station data for {station_id}: {e}", exc_info=True
+            )
+
+    def consumer_task(self, pbar=None):
+        """Process files from the queue until extraction is complete and queue is empty"""
+        try:
+            # Register this thread
+            self.register_thread(threading.current_thread())
+
+            logger.debug("Consumer starting")
+            while not (self.extraction_complete.is_set() and self.file_queue.empty()):
+                try:
+                    # Get a file with timeout to periodically check if extraction is complete
+                    try:
+                        file_path, original_name, mtime = self.file_queue.get(
+                            timeout=1.0
+                        )
+                    except queue.Empty:
+                        continue
+
+                    # Process the file
+                    station_id = Path(original_name).stem
+
+                    try:
+                        # Read the extracted file
+                        with open(
+                            file_path, "r", encoding="utf-8", errors="replace"
+                        ) as f:
+                            content = f.read()
+
+                        # Process the station data
+                        updated, filtered_content, metadata, count = (
+                            self.process_station_content(content, station_id, mtime)
+                        )
+
+                        if updated and filtered_content and metadata:
+                            self.write_station_data(
+                                station_id, filtered_content, metadata, count
+                            )
+
+                            with self.results_lock:
+                                self.updated_stations.add(station_id)
+                                if count > 0:
+                                    self.observation_counts[station_id] = count
+
+                    except Exception as e:
+                        logger.error(f"Error processing {station_id}: {e}")
+
+                    finally:
+                        # Update progress counter
+                        with self.processed_lock:
+                            self.processed_count += 1
+                            if (
+                                self.processed_count % PROGRESS_LOG_INTERVAL == 0
+                                or self.processed_count == self.total_files
+                            ):
+                                logger.info(
+                                    f"Processed {self.processed_count}/{self.total_files} files from {self.year}"
+                                )
+
+                        # Update progress bar if provided
+                        if pbar is not None:
+                            pbar.update(1)
+                            pbar.set_postfix({"updated": len(self.updated_stations)})
+
+                        # Remove temp file and mark task as done
+                        try:
+                            if file_path.exists():
+                                file_path.unlink()
+                        except Exception as e:
+                            logger.warning(f"Error removing temp file {file_path}: {e}")
+
+                        self.file_queue.task_done()
+
+                except Exception as e:
+                    logger.error(f"Error in consumer task: {e}")
+
+            logger.debug("Consumer finished")
+
+        except Exception as e:
+            logger.error(f"Consumer thread error: {e}", exc_info=True)
+        finally:
+            # Unregister this thread when done
+            self.unregister_thread()
+
+    def process(self):
+        """
+        Process the archive using the producer/consumer pattern.
+
+        Returns:
+            Tuple of (updated_stations, observation_counts)
+        """
+        try:
+            year = self.archive_path.stem
+            logger.info(
+                f"Starting producer/consumer processing for {self.archive_path}"
+            )
+
+            # Get list of all members first
+            logger.debug(f"Scanning archive {self.archive_path} for CSV files")
+            start_time = time.time()
+
+            try:
+                with tarfile.open(
+                    self.archive_path, "r:gz", bufsize=IO_BUFFER_SIZE
+                ) as tar:
+                    members = [m for m in tar.getmembers() if m.name.endswith(".csv")]
+                    self.total_files = len(members)
+            except Exception as e:
+                logger.error(f"Error scanning archive {self.archive_path}: {e}")
+                return set(), {}
+
+            logger.info(f"Found {self.total_files} files in {self.archive_path}")
+            logger.debug(f"Archive scan completed in {time.time() - start_time:.2f}s")
+
+            # Initialize progress bar
+            pbar = tqdm(
+                total=self.total_files,
+                desc=f"Processing {year}",
+                unit="files",
+                leave=True,
+                position=0,
+            )
+
+            # Start consumer threads - IMPORTANT: Not setting as daemon threads
+            logger.debug(f"Starting {self.max_processing_workers} consumer threads")
+            consumers = []
+            for i in range(self.max_processing_workers):
+                consumer = threading.Thread(target=self.consumer_task, args=(pbar,))
+                # NOT setting daemon=True - we want these to finish their work
+                consumer.start()
+                consumers.append(consumer)
+
+            # Split members into batches for producers
+            batch_size = max(1, len(members) // self.max_extraction_workers)
+            member_batches = [
+                members[i : i + batch_size] for i in range(0, len(members), batch_size)
+            ]
+
+            # Start producer threads - IMPORTANT: Not setting as daemon threads
+            logger.debug(f"Starting {len(member_batches)} producer threads")
+            producers = []
+            for i, batch in enumerate(member_batches):
+                producer = threading.Thread(target=self.producer_task, args=(batch,))
+                # NOT setting daemon=True - we want these to finish their work
+                producer.start()
+                producers.append(producer)
+
+            # Wait for producers to finish WITHOUT timeout
+            logger.debug("Waiting for producer threads to complete")
+            for producer in producers:
+                try:
+                    producer.join()  # No timeout - wait as long as needed
+                except Exception as e:
+                    logger.error(f"Error joining producer thread: {e}")
+
+            # Signal extraction is complete
+            logger.debug("All producers completed, marking extraction as complete")
+            self.extraction_complete.set()
+
+            # Wait for the queue to be empty
+            logger.debug("Waiting for queue to be empty")
+            while not self.file_queue.empty():
+                logger.debug(
+                    f"Queue still has {self.file_queue.qsize()} items, waiting..."
+                )
+                time.sleep(5)  # Check every 5 seconds
+
+            # Now wait for consumer threads WITHOUT timeout
+            logger.debug("Queue is empty, waiting for consumer threads to complete")
+            for consumer in consumers:
+                try:
+                    consumer.join()  # No timeout - wait as long as needed
+                except Exception as e:
+                    logger.error(f"Error joining consumer thread: {e}")
+
+            # Now it's definitely safe to clean up
+            self.safe_to_cleanup.set()
+
+            # Close progress bar
+            pbar.close()
+
+            # Explicitly check if we've processed all files
+            if self.processed_count < self.total_files:
+                logger.warning(
+                    f"Not all files were processed: {self.processed_count}/{self.total_files}"
+                )
+
+            # Process is complete
+            logger.info(
+                f"Processed {self.processed_count}/{self.total_files} files from {self.archive_path}"
+            )
+
+            # Update metadata with observation counts for this year
+            if self.observation_counts:
+                try:
+                    logger.info(
+                        f"Updating metadata with {len(self.observation_counts)} station counts for year {self.year}"
+                    )
+                    year_counts = {
+                        station_id: {self.year: count}
+                        for station_id, count in self.observation_counts.items()
+                    }
+                    update_metadata_with_counts(year_counts)
+                    logger.info(
+                        f"All metadata updates for {len(self.updated_stations)} stations committed"
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating metadata: {e}", exc_info=True)
+            else:
+                logger.info(f"No observation counts to update for year {self.year}")
+                logger.info(
+                    f"All metadata updates for {len(self.updated_stations)} stations committed"
+                )
+
+            return self.updated_stations, self.observation_counts
+
+        except Exception as e:
+            logger.error(f"Error in producer/consumer processing: {e}", exc_info=True)
+            return set(), {}
+
+        finally:
+            # Always clean up temp files, but now it will wait for threads to finish
+            self.cleanup()
+
+
+# In processor_core.py, modify the merge_station_data function:
 def merge_station_data(
     all_archives: List[Path], max_workers: int = DEFAULT_MAX_WORKERS
 ) -> Tuple[Set[str], Dict[str, Dict[str, int]]]:
     """
-    Process all archives and merge data by station ID.
-    Archives are processed sequentially, but files within each archive are processed in parallel.
-    Memory-optimized with batch metadata writing for better performance.
+    Process all archives and merge data by station ID using producer/consumer pattern.
+    Archives are processed sequentially, but files within archive are processed concurrently.
 
     Args:
         all_archives: List of paths to tar.gz archives
-        max_workers: Maximum number of concurrent workers for processing files within an archive
+        max_workers: Maximum number of workers to use for processing
 
     Returns:
         Tuple of (updated_stations, observation_counts)
         - updated_stations: Set of station IDs that were updated
         - observation_counts: Dictionary mapping station_id -> year -> count
     """
+    # Use fixed extraction workers and rest for processing
+    extraction_workers = EXTRACTION_WORKER_NUMBER
+    processing_workers = max(1, max_workers - extraction_workers)
 
-    # Get last modified dates for existing station files
-    last_modified_dates = get_station_modified_dates()
-    logger.info(f"Found {len(last_modified_dates)} existing station data files")
+    logger.info(
+        f"Using {extraction_workers} extraction workers and {processing_workers} processing workers"
+    )
 
-    # Track updated stations and observation counts
-    updated_stations = set()
-    observation_counts = defaultdict(lambda: defaultdict(int))
+    # Track all updated stations and observation counts
+    all_updated_stations = set()
+    all_observation_counts = {}
 
     # Process archives sequentially
-    for archive in tqdm(all_archives, desc="Processing archives", unit="archive"):
+    for archive in all_archives:
+        start_time = time.time()
         logger.info(f"Processing archive: {archive}")
-        year = archive.stem
 
         try:
-            # Extract list of station files from archive first
-            station_files = []
-            with tarfile.open(archive, "r:gz", bufsize=IO_BUFFER_SIZE) as tar:
-                station_files = [m for m in tar.getmembers() if m.name.endswith(".csv")]
+            # Create processor for this archive
+            processor = StationProcessor(
+                archive_path=archive,
+                max_extraction_workers=extraction_workers,
+                max_processing_workers=processing_workers,
+                queue_size=QUEUE_SIZE,
+            )
 
-            total_station_files = len(station_files)
-            logger.info(f"Found {total_station_files} station files in {archive}")
+            # Process the archive
+            updated_stations, observation_counts = processor.process()
 
-            # Shared variables to track updated stations and counts across all chunks
-            all_updated_stations = set()
-            archive_counts = defaultdict(int)
-            stations_lock = Lock()
+            # Update overall tracking
+            all_updated_stations.update(updated_stations)
+            for station_id, count in observation_counts.items():
+                if station_id not in all_observation_counts:
+                    all_observation_counts[station_id] = {}
+                all_observation_counts[station_id][archive.stem.split(".")[0]] = count
 
-            # Function to process a chunk and write it directly to disk
-            def process_and_write_chunk(
-                archive_path, station_chunk, progress_bar, progress_lock, chunk_id
-            ):
-                try:
-                    chunk_data, chunk_counts = process_station_chunk(
-                        archive_path, station_chunk, progress_bar, progress_lock
-                    )
-                    chunk_updated = set(chunk_data.keys())
+            # Log results for this archive
+            elapsed_time = time.time() - start_time
+            logger.info(f"Completed processing {archive} in {elapsed_time:.2f}s")
+            logger.info(f"Updated {len(updated_stations)} stations in {archive}")
 
-                    logger.debug(
-                        f"Writing data for chunk {chunk_id} with {len(chunk_data)} stations"
-                    )
-                    write_station_data_to_disk(chunk_data)
-
-                    # Update the global set of updated stations and observation counts
-                    with stations_lock:
-                        all_updated_stations.update(chunk_updated)
-                        for station_id, count in chunk_counts.items():
-                            archive_counts[station_id] = count
-
-                    # Clear chunk data to free memory
-                    chunk_data.clear()
-                    gc.collect()
-
-                    return len(chunk_updated)
-                except Exception as e:
-                    logger.error(
-                        f"Error processing chunk {chunk_id}: {e}", exc_info=True
-                    )
-                    return 0
-
-            # Process station files in parallel
-            if max_workers > 1 and station_files:
-                # Create a shared progress bar for all workers
-                progress_lock = Lock()
-                progress = tqdm(
-                    total=total_station_files, desc=f"Processing {year}", unit="station"
-                )
-
-                base_chunk_size = max(1, total_station_files // (max_workers * 3))
-                station_chunks = []
-                start_idx = 0
-
-                while start_idx < len(station_files):
-                    # Vary chunk size by ±15% to reduce simultaneous writes
-                    variation = random.uniform(0.85, 1.15)
-                    chunk_size = max(1, int(base_chunk_size * variation))
-
-                    end_idx = min(start_idx + chunk_size, len(station_files))
-                    station_chunks.append(station_files[start_idx:end_idx])
-                    start_idx = end_idx
-
+            # Export current metadata to CSV after each archive for incremental backup
+            try:
                 logger.info(
-                    f"Created {len(station_chunks)} varied-size chunks with ~{base_chunk_size} stations each"
+                    f"Exporting intermediate metadata to CSV after processing {archive}"
+                )
+                from metadata_manager import export_to_csv
+
+                export_to_csv()
+            except Exception as e:
+                logger.error(
+                    f"Error exporting intermediate metadata to CSV: {e}", exc_info=True
                 )
 
-                # Use ThreadPoolExecutor for concurrency within single archive
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=max_workers
-                ) as executor:
-                    futures = [
-                        executor.submit(
-                            process_and_write_chunk,
-                            archive,
-                            chunk,
-                            progress,
-                            progress_lock,
-                            i,
-                        )
-                        for i, chunk in enumerate(station_chunks)
-                    ]
-
-                    # Wait for all futures to complete
-                    for future in concurrent.futures.as_completed(futures):
-                        try:
-                            stations_processed = future.result()
-                            logger.debug(
-                                f"Chunk completed with {stations_processed} stations processed"
-                            )
-                        except Exception as e:
-                            logger.error(f"Error in future: {e}", exc_info=True)
-
-                progress.close()
-
-                # Update the main set of updated stations
-                updated_stations.update(all_updated_stations)
-                logger.info(
-                    f"Updated {len(all_updated_stations)} stations in this archive"
-                )
-
-            else:
-                progress = tqdm(
-                    total=total_station_files, desc=f"Processing {year}", unit="station"
-                )
-
-                # Process files in smaller chunks even in sequential mode
-                chunk_size = min(500, total_station_files)
-                for i in range(0, total_station_files, chunk_size):
-                    chunk = station_files[i : i + chunk_size]
-                    chunk_data, observation_counts = process_station_chunk(
-                        archive, chunk, progress
-                    )
-
-                    # Write this chunk to disk
-                    logger.debug(
-                        f"Writing sequential chunk {i//chunk_size} with {len(chunk_data)} stations"
-                    )
-                    write_station_data_to_disk(chunk_data)
-
-                    # Update tracked stations
-                    updated_stations.update(chunk_data.keys())
-
-                    # Clear memory
-                    chunk_data.clear()
-                    gc.collect()
-
-                progress.close()
-
-            # After processing the entire archive, flush metadata updates
-            for station_id, count in archive_counts.items():
-                if count > 0:
-                    observation_counts[station_id][year] = count
-
-            # Flush metadata updates to disk
-            logger.info("Flushing metadata updates to disk...")
-            num_updated = flush_metadata_updates()
-            logger.info(f"Metadata updates completed for {num_updated} stations")
-
-            # Update metadata with observation counts
-            if archive_counts:
-                logger.info(
-                    f"Updating metadata with {len(archive_counts)} station observation counts for year {year}"
-                )
-                year_counts = {
-                    station_id: {year: count}
-                    for station_id, count in archive_counts.items()
-                }
-                update_metadata_with_counts(year_counts)
-
-            # Force garbage collection after processing each archive
+            # Force garbage collection
             gc.collect()
-
-            # Update the main set of updated stations
-            updated_stations.update(all_updated_stations)
 
         except Exception as e:
             logger.error(f"Error processing archive {archive}: {e}", exc_info=True)
-            # Still try to flush metadata even if there was an error
-            flush_metadata_updates()
+            # Continue with next archive
 
-    logger.info(f"Total updated data for {len(updated_stations)} stations")
-    return updated_stations, observation_counts
+    # Finalize metadata and export to CSV
+    logger.info("Finalizing metadata and exporting to CSV")
+    finalize_metadata()
+
+    logger.info(f"Total updated data for {len(all_updated_stations)} stations")
+    return all_updated_stations, all_observation_counts
 
 
 def sort_station_files_chronologically():
