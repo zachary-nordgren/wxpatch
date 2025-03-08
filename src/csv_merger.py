@@ -2,7 +2,6 @@
 """
 Functions for merging and processing CSV data, with Polars integration for performance.
 """
-import time
 import logging
 import csv
 import io

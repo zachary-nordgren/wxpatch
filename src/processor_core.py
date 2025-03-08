@@ -26,7 +26,7 @@ from config import (
     EXTRACTION_WORKER_NUMBER,
     IO_BUFFER_SIZE,
     MERGED_DIR,
-    DATA_DIR,
+    TEMP_DIR,
     PROGRESS_LOG_INTERVAL,
     QUEUE_SIZE,
 )
@@ -64,7 +64,7 @@ class StationProcessor:
         self.year = archive_path.stem.split(".")[0]
 
         # Create temp directory under ../data/temp
-        temp_root = DATA_DIR / "temp"
+        temp_root = TEMP_DIR
         temp_root.mkdir(parents=True, exist_ok=True)
 
         # Create a unique subdirectory for this process

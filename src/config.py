@@ -11,6 +11,7 @@ BASE_URL = "https://www.ncei.noaa.gov/data/global-hourly/archive/csv/"
 DATA_DIR = Path("../data")
 RAW_DIR = DATA_DIR / "raw"
 MERGED_DIR = DATA_DIR / "merged"
+TEMP_DIR = DATA_DIR / "temp"
 
 # File I/O settings
 IO_BUFFER_SIZE = 16 * 1024 * 1024  # MB
@@ -29,7 +30,7 @@ MAX_DOWNLOAD_RETRIES = 3  # Maximum number of download retry attempts
 MAX_DOWNLOAD_THREADS = 4  # Maximum number of concurrent downloads
 
 # Default processing settings
-DEFAULT_MAX_WORKERS = 12  # Default number of parallel processing workers
+DEFAULT_MAX_WORKERS = 14  # Default number of parallel processing workers
 METADATA_BATCH_SIZE = 1024  # Number of stations to process before writing metadata
 
 # Producer/Consumer pattern settings

@@ -45,13 +45,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Process NOAA Global Hourly weather data"
     )
-    # Add the new clean option
     parser.add_argument(
         "--clean",
         action="store_true",
         help="Clean up log files, merged data, and temp directories (preserves raw downloads)",
     )
-    # Existing arguments
     parser.add_argument(
         DOWNLOAD_ONLY_OPTION,
         action="store_true",
