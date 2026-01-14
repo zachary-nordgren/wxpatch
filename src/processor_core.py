@@ -250,6 +250,7 @@ class StationProcessor:
     ):
         """
         Write station data to disk with proper merging.
+        Optimized to use Polars directly for reading/writing, eliminating redundant string operations.
 
         Args:
             station_id: The station identifier
@@ -264,19 +265,96 @@ class StationProcessor:
             # Append or create station data file
             if station_path.exists():
                 try:
-                    # Read existing content
-                    with gzip.open(
-                        station_path, "rt", encoding="utf-8", errors="replace"
-                    ) as f:
-                        existing_content = f.read()
+                    # Read existing file directly with Polars (no intermediate string)
+                    # Polars can read from gzip files directly by path, or from file handles
+                    try:
+                        # Try reading directly from gzip file handle
+                        with gzip.open(station_path, "rb") as f:
+                            existing_df = pl.read_csv(
+                                f,
+                                has_header=True,
+                                quote_char='"',
+                                ignore_errors=True,
+                                infer_schema_length=0,
+                                try_parse_dates=False,
+                            )
+                        # Verify we got data
+                        if existing_df.shape[0] == 0:
+                            raise ValueError("Empty DataFrame read from file")
+                    except Exception as read_e:
+                        # Fallback: read as string if direct read fails
+                        logger.debug(f"Direct Polars read failed, using string fallback: {read_e}")
+                        with gzip.open(
+                            station_path, "rt", encoding="utf-8", errors="replace"
+                        ) as f:
+                            existing_content = f.read()
+                        merged_content = merge_csv_data_with_polars(
+                            existing_content, content
+                        )
+                        with gzip.open(station_path, "wt", encoding="utf-8") as f:
+                            f.write(merged_content)
+                        update_station_metadata(station_id, metadata)
+                        return
 
-                    merged_content = merge_csv_data_with_polars(
-                        existing_content, content
+                    # Parse new content
+                    from io import StringIO
+                    new_df = pl.read_csv(
+                        StringIO(content),
+                        has_header=True,
+                        quote_char='"',
+                        ignore_errors=True,
+                        infer_schema_length=0,
+                        try_parse_dates=False,
                     )
 
-                    # Write back merged content
-                    with gzip.open(station_path, "wt", encoding="utf-8") as f:
-                        f.write(merged_content)
+                    # Handle DATE column if present
+                    if "DATE" in existing_df.columns:
+                        existing_df = existing_df.with_columns(
+                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                        )
+                    if "DATE" in new_df.columns:
+                        new_df = new_df.with_columns(
+                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                        )
+
+                    # Fill nulls and cast to strings (except DATE)
+                    existing_cols = [col for col in existing_df.columns if col != "DATE"]
+                    new_cols = [col for col in new_df.columns if col != "DATE"]
+                    if existing_cols:
+                        existing_df = existing_df.with_columns(
+                            [pl.col(existing_cols).fill_null("").cast(pl.Utf8)]
+                        )
+                    if new_cols:
+                        new_df = new_df.with_columns(
+                            [pl.col(new_cols).fill_null("").cast(pl.Utf8)]
+                        )
+
+                    # Merge dataframes
+                    merged_df = (
+                        pl.concat([existing_df, new_df], how="diagonal")
+                        .unique()
+                        .fill_null("")
+                    )
+
+                    # Get canonical headers and reorder
+                    from csv_merger import get_canonical_headers
+                    canonical_headers = get_canonical_headers(merged_df.columns)
+                    merged_df = merged_df.select([pl.col(col) for col in canonical_headers])
+
+                    # Format DATE column back to string if present
+                    if "DATE" in merged_df.columns:
+                        merged_df = merged_df.with_columns(
+                            [pl.col("DATE").dt.strftime("%Y-%m-%dT%H:%M:%S")]
+                        )
+
+                    # Cast all to strings for consistent output
+                    merged_df = merged_df.select(
+                        [pl.col(col).cast(pl.Utf8) for col in merged_df.columns]
+                    )
+
+                    # Write directly to gzipped file
+                    with gzip.open(station_path, "wb") as f:
+                        merged_df.write_csv(f, quote_style="necessary")
 
                 except Exception as e:
                     logger.error(
@@ -652,67 +730,97 @@ def sort_station_files_chronologically():
     def sort_station_file(station_path):
         """
         Sort a single station file chronologically using Polars.
+        Optimized to read directly from gzip file without intermediate string conversion.
         DATE is expected to be the second column (index 1) in ISO format.
         Treats all columns as strings except the date column.
         """
         try:
-            # Read the gzipped CSV file
-            with gzip.open(station_path, "rt", encoding="utf-8", errors="replace") as f:
-                content = f.read()
+            # Read directly from gzipped CSV file with Polars
+            try:
+                with gzip.open(station_path, "rb") as f:
+                    # Read first to get headers
+                    df = pl.read_csv(
+                        f,
+                        has_header=True,
+                        quote_char='"',
+                        ignore_errors=True,
+                        infer_schema_length=0,
+                        try_parse_dates=False,
+                    )
+            except Exception as read_e:
+                # Fallback: read as string if direct read fails
+                logger.debug(f"Direct Polars read failed, using string fallback: {read_e}")
+                with gzip.open(station_path, "rt", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
 
-            # Split header and data to preserve header exactly
-            if "\n" not in content:
+                if "\n" not in content:
+                    logger.warning(f"No data rows in {station_path.name}, skipping")
+                    return True
+
+                header_line, data_content = content.split("\n", 1)
+                csv_reader = csv.reader(io.StringIO(header_line))
+                headers = next(csv_reader, None)
+
+                if not headers or len(headers) < 2:
+                    logger.warning(f"Invalid headers in {station_path.name}, skipping")
+                    return False
+
+                date_col_name = headers[1] if len(headers) > 1 else "DATE"
+                schema = {col: pl.Utf8 for col in headers}
+                if date_col_name in headers:
+                    schema[date_col_name] = pl.Datetime
+
+                df = pl.read_csv(
+                    io.StringIO(header_line + "\n" + data_content),
+                    schema=schema,
+                    try_parse_dates=False,
+                    infer_schema_length=0,
+                )
+
+            # Check if we have data
+            if df.shape[0] == 0:
                 logger.warning(f"No data rows in {station_path.name}, skipping")
                 return True
 
-            header_line, data_content = content.split("\n", 1)
+            # Find date column (should be second column or named DATE)
+            date_col_name = None
+            if len(df.columns) > 1:
+                # Try second column first
+                potential_date_col = df.columns[1]
+                if "DATE" in potential_date_col.upper() or potential_date_col == "DATE":
+                    date_col_name = potential_date_col
+            if not date_col_name and "DATE" in df.columns:
+                date_col_name = "DATE"
 
-            # Parse CSV with proper header handling
-            csv_reader = csv.reader(io.StringIO(header_line))
-            headers = next(csv_reader, None)
-
-            if not headers or len(headers) < 2:
-                logger.warning(f"Invalid headers in {station_path.name}, skipping")
-                return False
-
-            # Confirm which column is the date column (should be 2nd column, index 1)
-            date_col_idx = 1  # Assume DATE is second column
-            date_col_name = (
-                headers[date_col_idx] if len(headers) > date_col_idx else "DATE"
-            )
-
-            # Create schema with all columns as strings
-            schema = {col: pl.Utf8 for col in headers}
-
-            # Only parse the date column as datetime - keep everything else as strings
-            if date_col_name in headers:
-                schema[date_col_name] = pl.Datetime
-
-            # Create a DataFrame with the CSV data - explicitly set schema
-            df = pl.read_csv(
-                io.StringIO(header_line + "\n" + data_content),
-                schema=schema,
-                try_parse_dates=False,  # Don't auto-parse dates, rely on schema
-                infer_schema_length=0,  # Don't infer schema
-            )
-
-            # Drop duplicates to clean the data
-            df = df.unique()
-
-            # Sort by the date column
-            if date_col_name in df.columns:
-                sorted_df = df.sort(date_col_name)
-
-                # Write back to file
-                with gzip.open(station_path, "wt", encoding="utf-8") as f:
-                    sorted_df.write_csv(f)
-
-                return True
-            else:
+            if not date_col_name:
                 logger.warning(
-                    f"Could not find expected date column '{date_col_name}' in {station_path.name}"
+                    f"Could not find date column in {station_path.name}, skipping sort"
                 )
                 return False
+
+            # Parse date column if it's a string
+            if df[date_col_name].dtype == pl.Utf8:
+                df = df.with_columns(
+                    [pl.col(date_col_name).str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                )
+
+            # Drop duplicates and sort
+            df = df.unique().sort(date_col_name)
+
+            # Format date back to string if needed
+            if df[date_col_name].dtype == pl.Datetime:
+                df = df.with_columns(
+                    [pl.col(date_col_name).dt.strftime("%Y-%m-%dT%H:%M:%S")]
+                )
+
+            # Cast all to strings for consistent output
+            df = df.select([pl.col(col).cast(pl.Utf8) for col in df.columns])
+
+            # Write back to file directly
+            with gzip.open(station_path, "wb") as f:
+                df.write_csv(f, quote_style="necessary")
+
+            return True
 
         except Exception as e:
             logger.error(f"Error sorting {station_path.name}: {e}")

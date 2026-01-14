@@ -218,6 +218,7 @@ def merge_csv_data(existing_content: str, new_content: str) -> str:
 def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
     """
     Merge CSV content using Polars for better performance.
+    Optimized to reduce string conversions and use efficient Polars operations.
     Handles quoted fields with internal commas correctly.
     """
 
@@ -229,6 +230,7 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
                 return None
 
             # Use Polars' native CSV parser with proper settings
+            # Read directly from StringIO without intermediate conversions
             df = pl.read_csv(
                 StringIO(content),
                 has_header=True,
@@ -238,22 +240,22 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
                 try_parse_dates=False,  # We'll handle dates explicitly
             )
 
-            # Cast all columns to strings except DATE
+            if df.shape[0] == 0:
+                logger.warning(f"No data rows found in {source_name}")
+                return None
+
+            # Handle DATE column parsing if present
             if "DATE" in df.columns:
-                # Parse DATE column to datetime and format it back to standard format
                 df = df.with_columns(
                     [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
                 )
 
-            # Fill nulls with empty strings for all string columns
+            # Fill nulls and cast non-date columns to strings in one operation
             non_date_cols = [col for col in df.columns if col != "DATE"]
             if non_date_cols:
                 df = df.with_columns(
                     [pl.col(non_date_cols).fill_null("").cast(pl.Utf8)]
                 )
-
-            if df.shape[0] == 0:
-                logger.warning(f"No data rows found in {source_name}")
 
             return df
 
@@ -277,9 +279,12 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
             logger.warning("Failed to parse new file, falling back to standard merge")
             return merge_csv_data(existing_content, new_content)
 
-        # Merge and process dataframes in one chain of operations
+        # Merge and process dataframes in one optimized chain
+        # Use diagonal concat to handle schema differences, then deduplicate
         merged_df = (
-            pl.concat([existing_df, new_df], how="diagonal").unique().fill_null("")
+            pl.concat([existing_df, new_df], how="diagonal")
+            .unique()
+            .fill_null("")
         )
 
         # Get canonical headers and reorder columns
@@ -287,7 +292,7 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
         merged_df = merged_df.select([pl.col(col) for col in canonical_headers])
 
         # Format DATE column back to string with ISO format before writing
-        if "DATE" in merged_df.columns:
+        if "DATE" in merged_df.columns and merged_df["DATE"].dtype == pl.Datetime:
             merged_df = merged_df.with_columns(
                 [pl.col("DATE").dt.strftime("%Y-%m-%dT%H:%M:%S")]
             )
@@ -297,7 +302,7 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
             [pl.col(col).cast(pl.Utf8) for col in merged_df.columns]
         )
 
-        # Convert back to CSV with proper quoting
+        # Convert back to CSV with proper quoting - write to StringIO
         output = io.StringIO()
         merged_df.write_csv(output, quote_style="necessary")
 

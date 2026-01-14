@@ -11,11 +11,15 @@ import threading
 import shutil
 import tarfile
 import time
+import gzip
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Tuple, Set, Optional
 from contextlib import contextmanager
 from tqdm import tqdm
+from datetime import datetime, timedelta
+from io import StringIO
+import polars as pl
 
 from config import MERGED_DIR, METADATA_FIELDS
 from utils import safe_read_from_tar
@@ -30,7 +34,7 @@ LEGACY_CSV_PATH = MERGED_DIR / "wx_info.csv"
 _thread_local = threading.local()
 
 # Schema version
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Lock for schema initialization
 _init_lock = threading.Lock()
@@ -172,6 +176,43 @@ def _initialize_database_internal():
             # Create tables if needed
             if create_new or current_version < SCHEMA_VERSION:
                 logger.info(f"Initializing metadata database (v{SCHEMA_VERSION})")
+                
+                # If upgrading, add new columns to existing table
+                if not create_new and current_version < SCHEMA_VERSION:
+                    logger.info("Upgrading database schema from v%d to v%d", current_version, SCHEMA_VERSION)
+                    try:
+                        # Add new columns if they don't exist (SQLite doesn't support IF NOT EXISTS for ALTER TABLE)
+                        new_columns = [
+                            "first_observation_date", "last_observation_date", "total_observation_count",
+                            "tmp_completeness_pct", "dew_completeness_pct", "slp_completeness_pct",
+                            "wnd_completeness_pct", "vis_completeness_pct", "cig_completeness_pct",
+                            "tmp_mean", "tmp_std", "tmp_min", "tmp_max",
+                            "dew_mean", "dew_std",
+                            "slp_mean", "slp_std", "slp_min", "slp_max",
+                            "gap_count", "max_gap_duration_hours", "timezone", "observation_frequency"
+                        ]
+                        for col in new_columns:
+                            try:
+                                cursor.execute(f"ALTER TABLE stations ADD COLUMN {col} TEXT")
+                            except sqlite3.OperationalError:
+                                # Column might already exist, try with appropriate type
+                                try:
+                                    if col in ["total_observation_count", "gap_count"]:
+                                        cursor.execute(f"ALTER TABLE stations ADD COLUMN {col} INTEGER")
+                                    elif col in ["tmp_completeness_pct", "dew_completeness_pct", "slp_completeness_pct",
+                                                "wnd_completeness_pct", "vis_completeness_pct", "cig_completeness_pct",
+                                                "tmp_mean", "tmp_std", "tmp_min", "tmp_max",
+                                                "dew_mean", "dew_std",
+                                                "slp_mean", "slp_std", "slp_min", "slp_max",
+                                                "max_gap_duration_hours", "observation_frequency"]:
+                                        cursor.execute(f"ALTER TABLE stations ADD COLUMN {col} REAL")
+                                    else:
+                                        cursor.execute(f"ALTER TABLE stations ADD COLUMN {col} TEXT")
+                                except sqlite3.OperationalError:
+                                    # Column already exists, skip
+                                    pass
+                    except Exception as e:
+                        logger.warning("Error adding new columns during upgrade: %s", e)
 
                 # Settings table
                 cursor.execute(
@@ -193,7 +234,32 @@ def _initialize_database_internal():
                     elevation TEXT,
                     name TEXT,
                     call_sign TEXT,
-                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    -- High priority metadata
+                    first_observation_date TEXT,
+                    last_observation_date TEXT,
+                    total_observation_count INTEGER,
+                    tmp_completeness_pct REAL,
+                    dew_completeness_pct REAL,
+                    slp_completeness_pct REAL,
+                    wnd_completeness_pct REAL,
+                    vis_completeness_pct REAL,
+                    cig_completeness_pct REAL,
+                    tmp_mean REAL,
+                    tmp_std REAL,
+                    tmp_min REAL,
+                    tmp_max REAL,
+                    dew_mean REAL,
+                    dew_std REAL,
+                    slp_mean REAL,
+                    slp_std REAL,
+                    slp_min REAL,
+                    slp_max REAL,
+                    -- Medium priority metadata
+                    gap_count INTEGER,
+                    max_gap_duration_hours REAL,
+                    timezone TEXT,
+                    observation_frequency REAL
                 )
                 """
                 )
@@ -370,6 +436,195 @@ def import_from_csv(csv_path: Path):
         logger.error(f"Error importing from CSV: {e}", exc_info=True)
 
 
+def compute_station_statistics(station_file_path: Path) -> Dict[str, Optional[float]]:
+    """
+    Compute statistics for a station from its data file.
+    
+    Args:
+        station_file_path: Path to station data file (CSV.gz or Parquet)
+        
+    Returns:
+        Dictionary with computed statistics
+    """
+    stats = {
+        "first_observation_date": None,
+        "last_observation_date": None,
+        "total_observation_count": 0,
+        "tmp_completeness_pct": None,
+        "dew_completeness_pct": None,
+        "slp_completeness_pct": None,
+        "wnd_completeness_pct": None,
+        "vis_completeness_pct": None,
+        "cig_completeness_pct": None,
+        "tmp_mean": None,
+        "tmp_std": None,
+        "tmp_min": None,
+        "tmp_max": None,
+        "dew_mean": None,
+        "dew_std": None,
+        "slp_mean": None,
+        "slp_std": None,
+        "slp_min": None,
+        "slp_max": None,
+        "gap_count": None,
+        "max_gap_duration_hours": None,
+        "timezone": None,
+        "observation_frequency": None,
+    }
+    
+    try:
+        # Read the station file
+        if station_file_path.suffix == ".gz" or station_file_path.suffixes == [".csv", ".gz"]:
+            with gzip.open(station_file_path, "rb") as f:
+                df = pl.read_csv(
+                    f,
+                    has_header=True,
+                    quote_char='"',
+                    ignore_errors=True,
+                    infer_schema_length=0,
+                    try_parse_dates=False,
+                )
+        elif station_file_path.suffix == ".parquet":
+            df = pl.read_parquet(station_file_path)
+        else:
+            logger.warning("Unknown file format for %s", station_file_path)
+            return stats
+        
+        if df.shape[0] == 0:
+            return stats
+        
+        # Parse DATE column if present
+        if "DATE" in df.columns:
+            df = df.with_columns(
+                [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+            )
+            
+            # Get first and last observation dates
+            date_col = df["DATE"]
+            valid_dates = date_col.filter(date_col.is_not_null())
+            if len(valid_dates) > 0:
+                first_date = valid_dates.min()
+                last_date = valid_dates.max()
+                if first_date is not None:
+                    stats["first_observation_date"] = first_date.strftime("%Y-%m-%dT%H:%M:%S")
+                if last_date is not None:
+                    stats["last_observation_date"] = last_date.strftime("%Y-%m-%dT%H:%M:%S")
+                
+                # Calculate gap metrics
+                if len(valid_dates) > 1:
+                    sorted_dates = valid_dates.sort()
+                    gaps = []
+                    for i in range(len(sorted_dates) - 1):
+                        gap = (sorted_dates[i + 1] - sorted_dates[i]).total_seconds() / 3600.0
+                        if gap > 24:  # Consider gaps > 24 hours as significant
+                            gaps.append(gap)
+                    
+                    stats["gap_count"] = len(gaps)
+                    stats["max_gap_duration_hours"] = max(gaps) if gaps else 0.0
+                    
+                    # Calculate observation frequency (average hours between observations)
+                    total_hours = (last_date - first_date).total_seconds() / 3600.0
+                    if total_hours > 0:
+                        stats["observation_frequency"] = total_hours / len(valid_dates)
+        
+        # Total observation count
+        stats["total_observation_count"] = df.shape[0]
+        
+        # Calculate completeness percentages and statistics
+        total_rows = df.shape[0]
+        
+        for var in ["TMP", "DEW", "SLP", "WND", "VIS", "CIG"]:
+            if var in df.columns:
+                # Calculate completeness
+                non_null = df[var].is_not_null().sum()
+                completeness = (non_null / total_rows * 100.0) if total_rows > 0 else 0.0
+                stats[f"{var.lower()}_completeness_pct"] = completeness
+                
+                # Extract numeric values from weather field (format: value,quality,source)
+                try:
+                    # Try to extract first part (before comma) and convert to numeric
+                    numeric_col = df[var].str.split(",").list.first().cast(pl.Float64, strict=False)
+                    
+                    # Filter out null values
+                    valid_values = numeric_col.filter(numeric_col.is_not_null())
+                    
+                    if len(valid_values) > 0:
+                        mean_val = valid_values.mean()
+                        std_val = valid_values.std()
+                        min_val = valid_values.min()
+                        max_val = valid_values.max()
+                        
+                        if var == "TMP":
+                            stats["tmp_mean"] = float(mean_val) if mean_val is not None else None
+                            stats["tmp_std"] = float(std_val) if std_val is not None else None
+                            stats["tmp_min"] = float(min_val) if min_val is not None else None
+                            stats["tmp_max"] = float(max_val) if max_val is not None else None
+                        elif var == "DEW":
+                            stats["dew_mean"] = float(mean_val) if mean_val is not None else None
+                            stats["dew_std"] = float(std_val) if std_val is not None else None
+                        elif var == "SLP":
+                            stats["slp_mean"] = float(mean_val) if mean_val is not None else None
+                            stats["slp_std"] = float(std_val) if std_val is not None else None
+                            stats["slp_min"] = float(min_val) if min_val is not None else None
+                            stats["slp_max"] = float(max_val) if max_val is not None else None
+                except Exception as e:
+                    # If extraction fails, skip statistics for this variable
+                    logger.debug("Could not extract numeric values for %s: %s", var, e)
+        
+        # Calculate timezone from longitude (approximate)
+        # This is a simple approximation - actual timezone calculation is more complex
+        if "LONGITUDE" in df.columns:
+            try:
+                lon_str = df["LONGITUDE"].first()
+                if lon_str and lon_str != "":
+                    lon = float(str(lon_str).split(",")[0])
+                    # Approximate timezone: UTC offset = longitude / 15
+                    tz_offset = int(round(lon / 15))
+                    stats["timezone"] = f"UTC{tz_offset:+d}"
+            except Exception:
+                pass
+    
+    except Exception as e:
+        logger.error("Error computing statistics for %s: %s", station_file_path, e, exc_info=True)
+    
+    return stats
+
+
+def update_station_statistics(station_id: str, station_file_path: Path):
+    """
+    Compute and update statistics for a station.
+    
+    Args:
+        station_id: Station ID
+        station_file_path: Path to station data file
+    """
+    try:
+        stats = compute_station_statistics(station_file_path)
+        
+        # Update database with statistics
+        with get_db_connection() as conn:
+            # Build update query dynamically for non-None values
+            updates = []
+            values = []
+            
+            for key, value in stats.items():
+                if value is not None:
+                    updates.append(f"{key} = ?")
+                    values.append(value)
+            
+            if updates:
+                values.append(station_id)
+                query = f"""
+                    UPDATE stations
+                    SET {', '.join(updates)}
+                    WHERE station_id = ?
+                """
+                conn.execute(query, values)
+    
+    except Exception as e:
+        logger.error("Error updating statistics for %s: %s", station_id, e, exc_info=True)
+
+
 def update_station_metadata(station_id: str, metadata: Dict[str, str]):
     """
     Update metadata for a single station.
@@ -484,23 +739,60 @@ def get_all_station_metadata() -> Dict[str, Dict[str, str]]:
         with get_db_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT station_id, latitude, longitude, elevation, name, call_sign
+                SELECT station_id, latitude, longitude, elevation, name, call_sign,
+                       first_observation_date, last_observation_date, total_observation_count,
+                       tmp_completeness_pct, dew_completeness_pct, slp_completeness_pct,
+                       wnd_completeness_pct, vis_completeness_pct, cig_completeness_pct,
+                       tmp_mean, tmp_std, tmp_min, tmp_max,
+                       dew_mean, dew_std,
+                       slp_mean, slp_std, slp_min, slp_max,
+                       gap_count, max_gap_duration_hours, timezone, observation_frequency
                 FROM stations
                 """
             )
 
             for row in cursor:
-                station_id, lat, lon, elev, name, call_sign = row
+                (station_id, lat, lon, elev, name, call_sign,
+                 first_date, last_date, total_count,
+                 tmp_comp, dew_comp, slp_comp, wnd_comp, vis_comp, cig_comp,
+                 tmp_mean, tmp_std, tmp_min, tmp_max,
+                 dew_mean, dew_std,
+                 slp_mean, slp_std, slp_min, slp_max,
+                 gap_count, max_gap, timezone, obs_freq) = row
+                
                 result[station_id] = {
                     "STATION": station_id,
-                    "LATITUDE": lat,
-                    "LONGITUDE": lon,
-                    "ELEVATION": elev,
-                    "NAME": name,
-                    "CALL_SIGN": call_sign,
+                    "LATITUDE": lat or "",
+                    "LONGITUDE": lon or "",
+                    "ELEVATION": elev or "",
+                    "NAME": name or "",
+                    "CALL_SIGN": call_sign or "",
+                    "FIRST_OBSERVATION_DATE": first_date or "",
+                    "LAST_OBSERVATION_DATE": last_date or "",
+                    "TOTAL_OBSERVATION_COUNT": str(total_count) if total_count else "",
+                    "TMP_COMPLETENESS_PCT": str(tmp_comp) if tmp_comp is not None else "",
+                    "DEW_COMPLETENESS_PCT": str(dew_comp) if dew_comp is not None else "",
+                    "SLP_COMPLETENESS_PCT": str(slp_comp) if slp_comp is not None else "",
+                    "WND_COMPLETENESS_PCT": str(wnd_comp) if wnd_comp is not None else "",
+                    "VIS_COMPLETENESS_PCT": str(vis_comp) if vis_comp is not None else "",
+                    "CIG_COMPLETENESS_PCT": str(cig_comp) if cig_comp is not None else "",
+                    "TMP_MEAN": str(tmp_mean) if tmp_mean is not None else "",
+                    "TMP_STD": str(tmp_std) if tmp_std is not None else "",
+                    "TMP_MIN": str(tmp_min) if tmp_min is not None else "",
+                    "TMP_MAX": str(tmp_max) if tmp_max is not None else "",
+                    "DEW_MEAN": str(dew_mean) if dew_mean is not None else "",
+                    "DEW_STD": str(dew_std) if dew_std is not None else "",
+                    "SLP_MEAN": str(slp_mean) if slp_mean is not None else "",
+                    "SLP_STD": str(slp_std) if slp_std is not None else "",
+                    "SLP_MIN": str(slp_min) if slp_min is not None else "",
+                    "SLP_MAX": str(slp_max) if slp_max is not None else "",
+                    "GAP_COUNT": str(gap_count) if gap_count is not None else "",
+                    "MAX_GAP_DURATION_HOURS": str(max_gap) if max_gap is not None else "",
+                    "TIMEZONE": timezone or "",
+                    "OBSERVATION_FREQUENCY": str(obs_freq) if obs_freq is not None else "",
                 }
     except Exception as e:
-        logger.error(f"Error getting station metadata: {e}", exc_info=True)
+        logger.error("Error getting station metadata: %s", e, exc_info=True)
 
     return result
 
@@ -674,8 +966,17 @@ def export_to_csv(output_path: Optional[Path] = None) -> bool:
             cursor = conn.execute("SELECT DISTINCT year FROM year_counts ORDER BY year")
             years = [row[0] for row in cursor]
 
-        # Define headers
-        headers = METADATA_FIELDS + years
+        # Define headers - include new metadata fields
+        extended_metadata_fields = METADATA_FIELDS + [
+            "FIRST_OBSERVATION_DATE", "LAST_OBSERVATION_DATE", "TOTAL_OBSERVATION_COUNT",
+            "TMP_COMPLETENESS_PCT", "DEW_COMPLETENESS_PCT", "SLP_COMPLETENESS_PCT",
+            "WND_COMPLETENESS_PCT", "VIS_COMPLETENESS_PCT", "CIG_COMPLETENESS_PCT",
+            "TMP_MEAN", "TMP_STD", "TMP_MIN", "TMP_MAX",
+            "DEW_MEAN", "DEW_STD",
+            "SLP_MEAN", "SLP_STD", "SLP_MIN", "SLP_MAX",
+            "GAP_COUNT", "MAX_GAP_DURATION_HOURS", "TIMEZONE", "OBSERVATION_FREQUENCY"
+        ]
+        headers = extended_metadata_fields + years
 
         # Open output file
         with open(temp_path, "w", encoding="utf-8", newline="") as f:
@@ -686,7 +987,14 @@ def export_to_csv(output_path: Optional[Path] = None) -> bool:
             with get_db_connection() as conn:
                 cursor = conn.execute(
                     """
-                    SELECT s.station_id, s.latitude, s.longitude, s.elevation, s.name, s.call_sign
+                    SELECT s.station_id, s.latitude, s.longitude, s.elevation, s.name, s.call_sign,
+                           s.first_observation_date, s.last_observation_date, s.total_observation_count,
+                           s.tmp_completeness_pct, s.dew_completeness_pct, s.slp_completeness_pct,
+                           s.wnd_completeness_pct, s.vis_completeness_pct, s.cig_completeness_pct,
+                           s.tmp_mean, s.tmp_std, s.tmp_min, s.tmp_max,
+                           s.dew_mean, s.dew_std,
+                           s.slp_mean, s.slp_std, s.slp_min, s.slp_max,
+                           s.gap_count, s.max_gap_duration_hours, s.timezone, s.observation_frequency
                     FROM stations s
                     ORDER BY s.station_id
                     """
@@ -703,8 +1011,8 @@ def export_to_csv(output_path: Optional[Path] = None) -> bool:
                     for station_row in stations_batch:
                         station_id = station_row[0]
 
-                        # Create row with metadata
-                        row = list(station_row)
+                        # Create row with metadata - convert None to empty string
+                        row = [str(val) if val is not None else "" for val in station_row]
 
                         # Get year counts for this station
                         year_cursor = conn.execute(
