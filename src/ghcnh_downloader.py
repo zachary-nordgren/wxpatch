@@ -13,7 +13,7 @@ Features:
 - State persistence for interrupted downloads
 
 Usage:
-    python ghcnh_downloader.py                     # Download all years, US stations only
+    python ghcnh_downloader.py                     # Download all years, US, CA, MX stations only
     python ghcnh_downloader.py --year 2024         # Download specific year
     python ghcnh_downloader.py --year 2020:2024    # Download year range
     python ghcnh_downloader.py --all-stations      # Download all stations (not just US)
@@ -31,7 +31,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from threading import Lock
+from threading import Lock, Semaphore
 from typing import List, Tuple, Optional, Generator
 import requests
 from tqdm import tqdm
@@ -49,29 +49,56 @@ GHCNH_BASE_URL = "https://www.ncei.noaa.gov/oa/global-historical-climatology-net
 GHCNH_RAW_DIR = DATA_DIR / "raw" / "ghcnh"
 STATE_FILE = GHCNH_RAW_DIR / ".download_state.json"
 
-# US station prefixes (stations starting with these are in the US)
-US_STATION_PREFIXES = ("US",)
+# North America station prefixes (FIPS 10-4 country codes)
+# Includes US territories: RQ (Puerto Rico), VQ (US Virgin Islands)
+NORTH_AMERICA_PREFIXES = ("US", "CA", "MX", "RQ", "VQ")
 
 # Adaptive rate limiting settings
-INITIAL_CONCURRENT = 4  # Start conservative
+INITIAL_CONCURRENT = 8  # Start conservative
 MAX_CONCURRENT = 12  # Maximum concurrent downloads
 MIN_CONCURRENT = 2  # Minimum concurrent downloads
-RATE_LIMIT_BACKOFF = 0.5  # Factor to reduce concurrency on rate limit
-RATE_LIMIT_RECOVERY = 1.2  # Factor to increase concurrency on success
 RATE_LIMIT_CODES = {429, 503, 504}  # HTTP codes indicating rate limiting
 CONNECTION_RESET_ERRORS = (ConnectionResetError, ConnectionError, requests.exceptions.ConnectionError)
+
+# Progress bar settings
+TQDM_NCOLS = 100  # Fixed width to prevent line wrapping issues
+
+# Log file path
+LOG_FILE = Path(__file__).parent / "ghcnh_downloader.log"
 
 logger = logging.getLogger("weather_processor")
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False):
-    """Configure logging for standalone execution."""
+    """Configure logging for standalone execution with both console and file output."""
     level = logging.DEBUG if verbose else (logging.WARNING if quiet else logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+
+    # Create formatter
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # Get the root logger for this module
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture all levels, handlers filter
+
+    # Clear existing handlers
+    root_logger.handlers.clear()
+
+    # Console handler with user-specified level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    # File handler - always log INFO and above
+    file_handler = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    logger.info(f"Logging to file: {LOG_FILE}")
 
 
 @dataclass
@@ -190,46 +217,43 @@ class DownloadState:
             self.years_completed.remove(year)
 
 
-class AdaptiveRateLimiter:
-    """Adaptive rate limiter that adjusts concurrency based on server responses."""
+class ConcurrencyController:
+    """
+    Controls concurrent downloads using a semaphore.
 
-    def __init__(self, initial_concurrent: int = INITIAL_CONCURRENT):
-        self.current_concurrent = initial_concurrent
-        self.lock = Lock()
-        self.consecutive_successes = 0
-        self.last_rate_limit = 0
+    Tracks active downloads and allows adjusting max concurrency dynamically.
+    """
 
-    def on_success(self):
-        """Called after a successful request."""
-        with self.lock:
-            self.consecutive_successes += 1
-            # Gradually increase concurrency after sustained success
-            if self.consecutive_successes >= 10:
-                self.current_concurrent = min(
-                    MAX_CONCURRENT,
-                    int(self.current_concurrent * RATE_LIMIT_RECOVERY)
-                )
-                self.consecutive_successes = 0
-                logger.debug(f"Increasing concurrency to {self.current_concurrent}")
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT):
+        self.max_concurrent = max_concurrent
+        self._semaphore = Semaphore(max_concurrent)
+        self._active = 0
+        self._lock = Lock()
 
-    def on_rate_limit(self):
-        """Called when we hit a rate limit."""
-        with self.lock:
-            self.consecutive_successes = 0
-            self.last_rate_limit = time.time()
-            old = self.current_concurrent
-            self.current_concurrent = max(
-                MIN_CONCURRENT,
-                int(self.current_concurrent * RATE_LIMIT_BACKOFF)
-            )
-            if old != self.current_concurrent:
-                logger.warning(f"Rate limited! Reducing concurrency from {old} to {self.current_concurrent}")
+    def acquire(self):
+        """Acquire a download slot (blocks if at max concurrency)."""
+        self._semaphore.acquire()
+        with self._lock:
+            self._active += 1
+
+    def release(self):
+        """Release a download slot."""
+        with self._lock:
+            self._active -= 1
+        self._semaphore.release()
 
     @property
-    def concurrency(self) -> int:
-        """Get current recommended concurrency level."""
-        with self.lock:
-            return self.current_concurrent
+    def active(self) -> int:
+        """Get number of currently active downloads."""
+        with self._lock:
+            return self._active
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
 
 
 def list_s3_objects(prefix: str, delimiter: str = "") -> Generator[dict, None, None]:
@@ -356,7 +380,7 @@ def get_parquet_files_for_year(year: int, us_only: bool = True) -> List[dict]:
         station_id = match.group(1)
 
         # Filter to US stations if requested
-        if us_only and not station_id.startswith(US_STATION_PREFIXES):
+        if us_only and not station_id.startswith(NORTH_AMERICA_PREFIXES):
             continue
 
         obj["station_id"] = station_id
@@ -372,17 +396,17 @@ def download_file(
     dest_path: Path,
     file_size: int,
     stats: DownloadStats,
-    rate_limiter: AdaptiveRateLimiter,
+    concurrency: ConcurrencyController,
 ) -> bool:
     """
-    Download a single file with retry mechanism and rate limit handling.
+    Download a single file with retry mechanism.
 
     Args:
         url: URL to download from
         dest_path: Local path to save the file
         file_size: Expected file size for verification
         stats: DownloadStats object for tracking progress
-        rate_limiter: AdaptiveRateLimiter for handling rate limits
+        concurrency: ConcurrencyController for tracking active downloads
 
     Returns:
         True if download successful, False otherwise
@@ -392,92 +416,86 @@ def download_file(
     # Disable keep-alive to prevent stale connection issues
     headers = {"Connection": "close"}
 
-    while retry_count < MAX_DOWNLOAD_RETRIES:
-        start_time = time.time()
-        try:
-            # Check if file already exists with correct size
-            if dest_path.exists():
-                existing_size = dest_path.stat().st_size
-                if file_size > 0 and existing_size == file_size:
-                    stats.add_skip(file_size)
-                    rate_limiter.on_success()
-                    return True
-                # File exists but size mismatch, re-download
-                dest_path.unlink()
+    with concurrency:  # Acquire/release download slot automatically
+        while retry_count < MAX_DOWNLOAD_RETRIES:
+            start_time = time.time()
+            try:
+                # Check if file already exists with correct size
+                if dest_path.exists():
+                    existing_size = dest_path.stat().st_size
+                    if file_size > 0 and existing_size == file_size:
+                        stats.add_skip(file_size)
+                        return True
+                    # File exists but size mismatch, re-download
+                    dest_path.unlink()
 
-            with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT, headers=headers) as response:
-                # Check for rate limiting
-                if response.status_code in RATE_LIMIT_CODES:
-                    rate_limiter.on_rate_limit()
-                    retry_count += 1
+                with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT, headers=headers) as response:
+                    # Check for rate limiting
+                    if response.status_code in RATE_LIMIT_CODES:
+                        retry_count += 1
+                        wait_time = backoff_base ** retry_count
+                        logger.debug(f"Rate limited on {url}, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+
+                    response.raise_for_status()
+
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    bytes_downloaded = 0
+
+                    with open(dest_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                                bytes_downloaded += len(chunk)
+
+                duration = time.time() - start_time
+                stats.add_download(bytes_downloaded, duration)
+                return True
+
+            except requests.exceptions.HTTPError as e:
+                retry_count += 1
+                if dest_path.exists():
+                    dest_path.unlink()
+
+                if retry_count < MAX_DOWNLOAD_RETRIES:
                     wait_time = backoff_base ** retry_count
-                    logger.debug(f"Rate limited on {url}, waiting {wait_time}s...")
+                    logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
-                    continue
+                else:
+                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
+                    stats.add_failure()
+                    return False
 
-                response.raise_for_status()
+            except CONNECTION_RESET_ERRORS as e:
+                # Connection was forcibly closed - common for long-running downloads
+                retry_count += 1
+                if dest_path.exists():
+                    dest_path.unlink()
 
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                bytes_downloaded = 0
+                if retry_count < MAX_DOWNLOAD_RETRIES:
+                    # Use longer backoff for connection resets
+                    wait_time = backoff_base ** (retry_count + 1)
+                    logger.debug(f"Connection reset for {dest_path.name}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} connection resets")
+                    stats.add_failure()
+                    return False
 
-                with open(dest_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                        if chunk:
-                            f.write(chunk)
-                            bytes_downloaded += len(chunk)
+            except Exception as e:
+                retry_count += 1
+                if dest_path.exists():
+                    dest_path.unlink()
 
-            duration = time.time() - start_time
-            stats.add_download(bytes_downloaded, duration)
-            rate_limiter.on_success()
-            return True
-
-        except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code in RATE_LIMIT_CODES:
-                rate_limiter.on_rate_limit()
-
-            retry_count += 1
-            if dest_path.exists():
-                dest_path.unlink()
-
-            if retry_count < MAX_DOWNLOAD_RETRIES:
-                wait_time = backoff_base ** retry_count
-                logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
-                stats.add_failure()
-                return False
-
-        except CONNECTION_RESET_ERRORS as e:
-            # Connection was forcibly closed - this is common for long-running downloads
-            # Treat similarly to rate limiting: back off and retry
-            retry_count += 1
-            if dest_path.exists():
-                dest_path.unlink()
-
-            if retry_count < MAX_DOWNLOAD_RETRIES:
-                # Use longer backoff for connection resets
-                wait_time = backoff_base ** (retry_count + 1)
-                logger.warning(f"Connection reset for {dest_path.name}, retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} connection resets")
-                stats.add_failure()
-                return False
-
-        except Exception as e:
-            retry_count += 1
-            if dest_path.exists():
-                dest_path.unlink()
-
-            if retry_count < MAX_DOWNLOAD_RETRIES:
-                wait_time = backoff_base ** retry_count
-                logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
-                stats.add_failure()
-                return False
+                if retry_count < MAX_DOWNLOAD_RETRIES:
+                    wait_time = backoff_base ** retry_count
+                    logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
+                    stats.add_failure()
+                    return False
 
     stats.add_failure()
     return False
@@ -500,7 +518,7 @@ def download_year(
     force: bool = False,
     max_workers: int = MAX_DOWNLOAD_THREADS,
     state: Optional[DownloadState] = None,
-    rate_limiter: Optional[AdaptiveRateLimiter] = None,
+    concurrency: Optional[ConcurrencyController] = None,
 ) -> Tuple[int, int]:
     """
     Download all parquet files for a specific year.
@@ -511,7 +529,7 @@ def download_year(
         force: Re-download even if file exists
         max_workers: Maximum number of parallel downloads
         state: Optional download state for persistence
-        rate_limiter: Optional rate limiter for adaptive concurrency
+        concurrency: Optional concurrency controller
 
     Returns:
         Tuple of (successful_downloads, failed_downloads)
@@ -524,9 +542,9 @@ def download_year(
     year_dir = GHCNH_RAW_DIR / str(year)
     year_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize rate limiter if not provided
-    if rate_limiter is None:
-        rate_limiter = AdaptiveRateLimiter()
+    # Initialize concurrency controller if not provided
+    if concurrency is None:
+        concurrency = ConcurrencyController(max_concurrent=max_workers)
 
     # Prepare download tasks and calculate totals
     tasks = []
@@ -538,7 +556,6 @@ def download_year(
         stats.total_bytes += file_info["Size"]
 
         # Skip if file exists with correct size (unless force)
-        # This is the ONLY check - if file doesn't exist or is wrong size, we download it
         if not force and dest_path.exists():
             if file_info["Size"] > 0 and dest_path.stat().st_size == file_info["Size"]:
                 stats.add_skip(file_info["Size"])
@@ -565,48 +582,87 @@ def download_year(
         state.current_year = year
         state.save(STATE_FILE)
 
-    # Create progress bar with rich formatting
-    with tqdm(
-        total=len(tasks),
-        desc=f"Year {year}",
-        unit="files",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
-    ) as pbar:
+    # Track failed files for retry
+    failed_tasks = []
+    failed_lock = Lock()
 
-        def update_postfix():
-            pbar.set_postfix_str(
-                f"{stats.format_speed()} | ETA: {stats.format_eta()} | Failed: {stats.failed_files}"
-            )
+    def do_download_pass(task_list: List[tuple], pass_name: str = ""):
+        """Execute a download pass and return failed tasks."""
+        nonlocal stats
+        pass_failed = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks upfront - ThreadPoolExecutor handles queuing
-            future_to_file = {
-                executor.submit(download_file, url, path, size, stats, rate_limiter): (path, filename, size)
-                for url, path, size, filename in tasks
-            }
+        desc = f"Year {year}" if not pass_name else f"Year {year} ({pass_name})"
 
-            for future in as_completed(future_to_file):
-                path, filename, size = future_to_file[future]
+        with tqdm(
+            total=len(task_list),
+            desc=desc,
+            unit="files",
+            ncols=TQDM_NCOLS,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{rate_fmt}] {postfix}",
+        ) as pbar:
 
-                try:
-                    success = future.result()
-                    if not success:
-                        logger.error(f"Failed to download {filename}")
-                except Exception as e:
-                    stats.add_failure()
-                    logger.error(f"Exception downloading {filename}: {e}")
+            def update_postfix():
+                pbar.set_postfix_str(
+                    f"{concurrency.active}/{max_workers} | {stats.format_speed()} | F:{stats.failed_files}"
+                )
 
-                pbar.update(1)
-                update_postfix()
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_task = {
+                    executor.submit(download_file, url, path, size, stats, concurrency): (url, path, size, filename)
+                    for url, path, size, filename in task_list
+                }
+
+                for future in as_completed(future_to_task):
+                    url, path, size, filename = future_to_task[future]
+
+                    try:
+                        success = future.result()
+                        if not success:
+                            with failed_lock:
+                                pass_failed.append((url, path, size, filename))
+                    except Exception as e:
+                        stats.add_failure()
+                        logger.error(f"Exception downloading {filename}: {e}")
+                        with failed_lock:
+                            pass_failed.append((url, path, size, filename))
+
+                    pbar.update(1)
+                    update_postfix()
+
+        return pass_failed
+
+    # First pass
+    failed_tasks = do_download_pass(tasks)
+
+    # Retry pass for failed files
+    if failed_tasks:
+        logger.info(f"Retrying {len(failed_tasks)} failed files for {year}...")
+        # Reset failure count for retry tracking
+        stats.failed_files = 0
+
+        # Give server a brief break before retries
+        time.sleep(2)
+
+        still_failed = do_download_pass(failed_tasks, "retry")
+
+        # Update final failure count
+        stats.failed_files = len(still_failed)
+
+        if still_failed:
+            logger.warning(f"{len(still_failed)} files still failed after retry:")
+            for _, _, _, filename in still_failed[:10]:
+                logger.warning(f"  - {filename}")
+            if len(still_failed) > 10:
+                logger.warning(f"  ... and {len(still_failed) - 10} more")
 
     # Final state save - only mark year complete if all files downloaded
     successful = stats.completed_files + stats.skipped_files
     if state:
-        # Only mark year as complete if we got all files
-        if successful == stats.total_files and stats.failed_files == 0:
+        if stats.failed_files == 0:
             state.mark_year_complete(year)
         state.total_downloaded_bytes += stats.downloaded_bytes
         state.save(STATE_FILE)
+
     logger.info(
         f"Year {year}: {successful} successful, {stats.failed_files} failed "
         f"({format_size(stats.downloaded_bytes)} downloaded)"
@@ -671,6 +727,68 @@ def show_status():
     print("=" * 60 + "\n")
 
 
+def show_inventory():
+    """Download and display station inventory from NOAA."""
+    import csv
+    from io import StringIO
+    from collections import Counter
+
+    inventory_url = GHCNH_BASE_URL + "hourly/doc/ghcnh-station-list.csv"
+
+    print("\n" + "=" * 60)
+    print("GHCNh Station Inventory")
+    print("=" * 60)
+    print(f"\nFetching station list from NOAA...")
+
+    try:
+        response = requests.get(inventory_url, timeout=DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch station inventory: {e}")
+        print(f"\nError: Could not download station list: {e}")
+        return
+
+    # Parse CSV
+    content = response.text
+    reader = csv.DictReader(StringIO(content))
+
+    # Count stations by country code (first 2 chars of station ID)
+    country_counts = Counter()
+    total_stations = 0
+
+    for row in reader:
+        # Try multiple possible column names for station ID
+        station_id = row.get("GHCN_ID", row.get("station_id", row.get("id", "")))
+        if len(station_id) >= 2:
+            country_code = station_id[:2]
+            country_counts[country_code] += 1
+            total_stations += 1
+
+    # Calculate North America counts
+    na_count = sum(country_counts.get(code, 0) for code in NORTH_AMERICA_PREFIXES)
+
+    print(f"\nTotal stations worldwide: {total_stations:,}")
+    print(f"North America filter ({', '.join(NORTH_AMERICA_PREFIXES)}): {na_count:,}")
+
+    # Show North America breakdown
+    print("\n--- North America Breakdown ---")
+    na_codes = [(code, country_counts.get(code, 0)) for code in NORTH_AMERICA_PREFIXES]
+    na_codes.sort(key=lambda x: -x[1])
+    for code, count in na_codes:
+        if count > 0:
+            print(f"  {code}: {count:,} stations")
+
+    # Show top 10 other countries
+    print("\n--- Top 10 Other Countries ---")
+    other_codes = [(code, count) for code, count in country_counts.items()
+                   if code not in NORTH_AMERICA_PREFIXES]
+    other_codes.sort(key=lambda x: -x[1])
+    for code, count in other_codes[:10]:
+        print(f"  {code}: {count:,} stations")
+
+    print("\n" + "=" * 60 + "\n")
+
+
 def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, max_workers: int = MAX_DOWNLOAD_THREADS) -> dict:
     """
     Audit downloaded files against the server to find missing files.
@@ -691,9 +809,11 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
         "total_size_mismatch": 0,
         "missing_files": [],
         "size_mismatch_files": [],
+        "fixed_success": 0,
+        "fixed_failed": 0,
     }
 
-    rate_limiter = AdaptiveRateLimiter() if fix else None
+    concurrency = ConcurrencyController(max_concurrent=max_workers) if fix else None
 
     for year in years:
         results["years_checked"] += 1
@@ -737,6 +857,8 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
                 stats.total_files = len(to_fix)
                 stats.total_bytes = sum(f["Size"] for f in to_fix)
 
+                year_dir.mkdir(parents=True, exist_ok=True)
+
                 tasks = [
                     (GHCNH_BASE_URL + f["Key"], year_dir / f["filename"], f["Size"], f["filename"])
                     for f in to_fix
@@ -744,20 +866,107 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
-                        executor.submit(download_file, url, path, size, stats, rate_limiter): filename
+                        executor.submit(download_file, url, path, size, stats, concurrency): filename
                         for url, path, size, filename in tasks
                     }
 
                     for future in as_completed(future_to_file):
                         filename = future_to_file[future]
                         try:
-                            future.result()
+                            success = future.result()
+                            if success:
+                                results["fixed_success"] += 1
+                            else:
+                                results["fixed_failed"] += 1
                         except Exception as e:
                             logger.error(f"Failed to fix {filename}: {e}")
+                            results["fixed_failed"] += 1
 
-                logger.info(f"Fixed {stats.completed_files} files for year {year}")
+                logger.info(f"Year {year}: fixed {stats.completed_files}/{len(to_fix)} files")
         else:
             logger.info(f"Year {year}: OK ({len(expected_files)} files)")
+
+    return results
+
+
+def clean_downloads(years: List[int], us_only: bool = True, dry_run: bool = True) -> dict:
+    """
+    Clean downloaded files by removing corrupted files and files not matching the station filter.
+
+    Args:
+        years: List of years to clean
+        us_only: If True, remove files not matching NORTH_AMERICA_PREFIXES
+        dry_run: If True, only report what would be deleted without actually deleting
+
+    Returns:
+        Dictionary with clean results
+    """
+    results = {
+        "years_checked": 0,
+        "files_checked": 0,
+        "corrupted_files": [],
+        "filtered_files": [],
+        "deleted_count": 0,
+        "deleted_bytes": 0,
+    }
+
+    for year in years:
+        results["years_checked"] += 1
+        year_dir = GHCNH_RAW_DIR / str(year)
+
+        if not year_dir.exists():
+            continue
+
+        # Get expected files from server for size verification
+        logger.info(f"Checking year {year}...")
+        expected_files = get_parquet_files_for_year(year, us_only=False)  # Get all for size check
+        expected_by_name = {f["filename"]: f for f in expected_files}
+
+        # Also get the filtered set to know which stations are valid
+        if us_only:
+            valid_files = get_parquet_files_for_year(year, us_only=True)
+            valid_names = {f["filename"] for f in valid_files}
+        else:
+            valid_names = set(expected_by_name.keys())
+
+        # Check each local file
+        local_files = list(year_dir.glob("*.parquet"))
+        for local_path in local_files:
+            results["files_checked"] += 1
+            filename = local_path.name
+            file_size = local_path.stat().st_size
+
+            # Check if file matches station filter
+            if filename not in valid_names:
+                # Extract station ID to check if it's a filter issue
+                match = re.match(r"GHCNh_([^_]+)_\d{4}\.parquet", filename)
+                if match:
+                    station_id = match.group(1)
+                    if us_only and not station_id.startswith(NORTH_AMERICA_PREFIXES):
+                        results["filtered_files"].append((year, filename, file_size))
+                        if not dry_run:
+                            local_path.unlink()
+                            results["deleted_count"] += 1
+                            results["deleted_bytes"] += file_size
+                        continue
+
+            # Check for size mismatch (corruption)
+            if filename in expected_by_name:
+                expected_size = expected_by_name[filename]["Size"]
+                if expected_size > 0 and file_size != expected_size:
+                    results["corrupted_files"].append((year, filename, file_size, expected_size))
+                    if not dry_run:
+                        local_path.unlink()
+                        results["deleted_count"] += 1
+                        results["deleted_bytes"] += file_size
+
+        # Report for this year
+        year_corrupted = len([f for f in results["corrupted_files"] if f[0] == year])
+        year_filtered = len([f for f in results["filtered_files"] if f[0] == year])
+        if year_corrupted or year_filtered:
+            logger.info(f"Year {year}: {year_corrupted} corrupted, {year_filtered} filtered out")
+        else:
+            logger.info(f"Year {year}: OK ({len(local_files)} files)")
 
     return results
 
@@ -774,6 +983,10 @@ Examples:
     python ghcnh_downloader.py --all-stations      # Download all stations globally
     python ghcnh_downloader.py --list-years        # List available years
     python ghcnh_downloader.py --status            # Show download progress
+    python ghcnh_downloader.py --audit             # Check for missing/corrupted files
+    python ghcnh_downloader.py --audit --fix       # Download missing/corrupted files
+    python ghcnh_downloader.py --clean             # Show files to delete (dry run)
+    python ghcnh_downloader.py --clean --delete    # Delete corrupted/non-matching files
         """
     )
     parser.add_argument(
@@ -797,6 +1010,11 @@ Examples:
         help="Show download status and exit"
     )
     parser.add_argument(
+        "--inventory",
+        action="store_true",
+        help="Download and display station inventory from NOAA (shows station counts by country)"
+    )
+    parser.add_argument(
         "--audit",
         action="store_true",
         help="Audit downloaded files against server to find missing/corrupted files"
@@ -805,6 +1023,16 @@ Examples:
         "--fix",
         action="store_true",
         help="Used with --audit: automatically download missing/corrupted files"
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Remove corrupted files and files not matching station filter (dry-run by default)"
+    )
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Used with --clean: actually delete files (otherwise just shows what would be deleted)"
     )
     parser.add_argument(
         "--force", "-f",
@@ -839,6 +1067,11 @@ Examples:
     # Status mode
     if args.status:
         show_status()
+        return
+
+    # Inventory mode
+    if args.inventory:
+        show_inventory()
         return
 
     # Use custom max workers if specified
@@ -896,7 +1129,59 @@ Examples:
             print(f"\nTo fix: python ghcnh_downloader.py --audit --fix")
 
         if args.fix and (results['total_missing'] > 0 or results['total_size_mismatch'] > 0):
-            print(f"\nFixed files have been downloaded.")
+            total_to_fix = results['total_missing'] + results['total_size_mismatch']
+            print(f"\nFix results:")
+            print(f"  Attempted: {total_to_fix}")
+            print(f"  Successful: {results['fixed_success']}")
+            print(f"  Failed: {results['fixed_failed']}")
+            if results['fixed_failed'] > 0:
+                print(f"\nSome files failed to download. Run --audit --fix again to retry.")
+
+        print("=" * 60 + "\n")
+        return
+
+    # Clean mode
+    if args.clean:
+        dry_run = not args.delete
+        mode_str = "DRY RUN" if dry_run else "DELETING"
+        logger.info(f"Cleaning {len(years_to_download)} years ({station_type} stations) - {mode_str}...")
+
+        results = clean_downloads(
+            years_to_download,
+            us_only=us_only,
+            dry_run=dry_run
+        )
+
+        print("\n" + "=" * 60)
+        print(f"Clean Results {'(DRY RUN)' if dry_run else ''}")
+        print("=" * 60)
+        print(f"Years checked: {results['years_checked']}")
+        print(f"Files checked: {results['files_checked']}")
+        print(f"Corrupted files: {len(results['corrupted_files'])}")
+        print(f"Non-matching stations: {len(results['filtered_files'])}")
+
+        if results['corrupted_files']:
+            print(f"\nCorrupted files (size mismatch):")
+            for year, filename, actual, expected in results['corrupted_files'][:10]:
+                print(f"  {year}/{filename}: {format_size(actual)} (expected {format_size(expected)})")
+            if len(results['corrupted_files']) > 10:
+                print(f"  ... and {len(results['corrupted_files']) - 10} more")
+
+        if results['filtered_files']:
+            print(f"\nNon-matching stations (not in {', '.join(NORTH_AMERICA_PREFIXES)}):")
+            for year, filename, size in results['filtered_files'][:10]:
+                print(f"  {year}/{filename} ({format_size(size)})")
+            if len(results['filtered_files']) > 10:
+                print(f"  ... and {len(results['filtered_files']) - 10} more")
+
+        total_to_delete = len(results['corrupted_files']) + len(results['filtered_files'])
+        total_bytes = sum(f[2] for f in results['filtered_files']) + sum(f[2] for f in results['corrupted_files'])
+
+        if dry_run and total_to_delete > 0:
+            print(f"\nWould delete {total_to_delete} files ({format_size(total_bytes)})")
+            print(f"To actually delete: python ghcnh_downloader.py --clean --delete")
+        elif not dry_run and results['deleted_count'] > 0:
+            print(f"\nDeleted {results['deleted_count']} files ({format_size(results['deleted_bytes'])})")
 
         print("=" * 60 + "\n")
         return
@@ -921,8 +1206,8 @@ Examples:
     # Ensure output directory exists
     GHCNH_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Create shared rate limiter
-    rate_limiter = AdaptiveRateLimiter(initial_concurrent=min(max_workers, INITIAL_CONCURRENT))
+    # Create shared concurrency controller
+    concurrency = ConcurrencyController(max_concurrent=max_workers)
 
     # Download each year
     total_success = 0
@@ -936,7 +1221,7 @@ Examples:
             force=args.force,
             max_workers=max_workers,
             state=state,
-            rate_limiter=rate_limiter,
+            concurrency=concurrency,
         )
         total_success += success
         total_failed += failed

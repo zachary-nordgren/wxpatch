@@ -27,7 +27,7 @@ METADATA_ONLY_FIELDS = ["LATITUDE", "LONGITUDE", "ELEVATION", "NAME"]
 DOWNLOAD_TIMEOUT = 300  # seconds
 DOWNLOAD_CHUNK_SIZE = 8192  # bytes
 MAX_DOWNLOAD_RETRIES = 3  # Maximum number of download retry attempts
-MAX_DOWNLOAD_THREADS = 4  # Maximum number of concurrent downloads
+MAX_DOWNLOAD_THREADS = 12  # Maximum number of concurrent downloads
 
 # Default processing settings
 DEFAULT_MAX_WORKERS = 14  # Default number of parallel processing workers

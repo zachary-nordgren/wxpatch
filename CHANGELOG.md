@@ -19,11 +19,72 @@
 
 - **Enhanced download features:**
   - **Automatic retries** with exponential backoff
-  - **Adaptive rate limiting** - automatically reduces concurrency when rate limited
   - **Resume/restart capability** - tracks progress in `.download_state.json`
   - **Rich progress bars** with bandwidth estimates and ETA
-  - **Concurrent downloads** - up to 12 parallel downloads (auto-tuned)
+  - **Concurrent downloads** - configurable parallel downloads (default: 12)
   - **State persistence** - interrupted downloads resume from where they left off
+
+#### 2026-01-18 - GHCNh Downloader North America Filter Update
+
+- **Expanded North America station filter to include US territories**
+  - Added Puerto Rico (RQ) and US Virgin Islands (VQ) to the filter
+  - Renamed constant from `US_STATION_PREFIXES` to `NORTH_AMERICA_PREFIXES`
+  - Now includes: US, CA, MX, RQ, VQ
+
+- **Added `--inventory` command to display station counts from NOAA**
+  - Downloads official `ghcnh-station-list.csv` from NOAA
+  - Shows total station counts worldwide and by country code
+  - Displays North America breakdown (US, CA, MX, RQ, VQ)
+  - Lists top 10 other countries for reference
+  - Usage: `python ghcnh_downloader.py --inventory`
+
+#### 2026-01-18 - GHCNh Downloader Audit and Clean Features
+
+- **Fixed `--audit --fix` to report actual download results**
+  - Previously showed "Fixed files have been downloaded" regardless of success/failure
+  - Now tracks and reports: attempted, successful, and failed counts
+  - Shows retry message if any downloads failed
+
+- **Added `--clean` feature to remove unwanted files**
+  - Identifies corrupted files (size mismatch with server)
+  - Identifies files not matching station filter (e.g., non-North America stations)
+  - Dry-run by default: shows what would be deleted without deleting
+  - Use `--clean --delete` to actually delete files
+  - Reports total files and bytes to be deleted/deleted
+
+- **Usage:**
+  ```bash
+  # Check for corrupted/non-matching files (dry run)
+  python ghcnh_downloader.py --clean
+
+  # Actually delete corrupted/non-matching files
+  python ghcnh_downloader.py --clean --delete
+
+  # Clean specific years only
+  python ghcnh_downloader.py --clean --year 2020:2024
+  ```
+
+#### 2026-01-18 - GHCNh Downloader Improvements
+
+- **Added automatic retry queue for failed downloads**
+  - Failed files are now automatically retried in a second pass after the main download
+  - Brief pause between passes to give server time to recover
+  - Clear reporting of files that still fail after retry
+
+- **Improved progress bar display**
+  - Narrower progress bar (100 columns) to prevent log line wrapping issues
+  - Shows current/max concurrent downloads (e.g., `4/12`)
+  - Cleaner format: `Year 2019 | 78%|████| 4357/5610 [5.36files/s] 4/12 | 1.7 MB/s | F:0`
+
+- **Added file logging**
+  - All logs now written to `src/ghcnh_downloader.log` in addition to console
+  - File logging always captures INFO level and above
+  - Useful for debugging download issues after the fact
+
+- **Simplified concurrency control**
+  - Replaced adaptive rate limiter with simpler semaphore-based concurrency controller
+  - Fixed concurrency tracking to accurately show active downloads
+  - Removed unused rate limit recovery/backoff logic
 
 - **Usage:**
   ```bash
