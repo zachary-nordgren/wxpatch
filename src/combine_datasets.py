@@ -293,24 +293,41 @@ def merge_metadata_databases(
         if db1_path.exists():
             logger.info("Importing metadata from %s", db1_path)
             conn1 = sqlite3.connect(db1_path)
-            conn1.execute("ATTACH DATABASE ? AS db1", (str(db1_path),))
-            
-            # Copy stations (use INSERT OR IGNORE to handle duplicates)
-            conn_out.executescript(f"""
-                ATTACH DATABASE '{db1_path}' AS db1;
-                INSERT OR IGNORE INTO stations 
-                SELECT * FROM db1.stations;
-                DETACH DATABASE db1;
-            """)
-            
-            # Copy year counts
-            conn_out.executescript(f"""
-                ATTACH DATABASE '{db1_path}' AS db1;
-                INSERT OR REPLACE INTO year_counts 
-                SELECT * FROM db1.year_counts;
-                DETACH DATABASE db1;
-            """)
-            
+
+            # Get column names from db1 to handle schema differences
+            cursor1 = conn1.execute("PRAGMA table_info(stations)")
+            db1_columns = [row[1] for row in cursor1]
+
+            # Get column mapping for output database
+            cursor_out = conn_out.execute("PRAGMA table_info(stations)")
+            out_columns = {row[1]: row[0] for row in cursor_out}
+
+            # Build INSERT columns list (only include columns that exist in output schema)
+            insert_cols = [col for col in db1_columns if col in out_columns]
+
+            if insert_cols:
+                # Read all rows from db1 and insert into output
+                select_cols = ", ".join(insert_cols)
+                cursor1 = conn1.execute(f"SELECT {select_cols} FROM stations")
+
+                for row in cursor1:
+                    placeholders = ", ".join(["?"] * len(insert_cols))
+                    conn_out.execute(
+                        f"INSERT OR IGNORE INTO stations ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                        row
+                    )
+
+            # Copy year counts (check if table exists first)
+            try:
+                cursor1 = conn1.execute("SELECT station_id, year, observation_count FROM year_counts")
+                for row in cursor1:
+                    conn_out.execute(
+                        "INSERT OR REPLACE INTO year_counts (station_id, year, observation_count) VALUES (?, ?, ?)",
+                        row
+                    )
+            except sqlite3.OperationalError as e:
+                logger.warning("Could not copy year_counts from db1: %s", e)
+
             conn1.close()
         
         # Merge from second database
@@ -417,13 +434,16 @@ def merge_metadata_databases(
                     conn_out.execute(query, insert_vals)
             
             # Copy year counts (will replace if year exists, add if new)
-            conn_out.executescript(f"""
-                ATTACH DATABASE '{db2_path}' AS db2;
-                INSERT OR REPLACE INTO year_counts 
-                SELECT * FROM db2.year_counts;
-                DETACH DATABASE db2;
-            """)
-            
+            try:
+                cursor2 = conn2.execute("SELECT station_id, year, observation_count FROM year_counts")
+                for row in cursor2:
+                    conn_out.execute(
+                        "INSERT OR REPLACE INTO year_counts (station_id, year, observation_count) VALUES (?, ?, ?)",
+                        row
+                    )
+            except sqlite3.OperationalError as e:
+                logger.warning("Could not copy year_counts from db2: %s", e)
+
             conn2.close()
         
         # Set schema version
@@ -610,25 +630,72 @@ def main():
         help="Write output as Parquet files instead of CSV.gz",
     )
     parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="Only run metadata merge and statistics calculation (skip combining station data)",
+    )
+    parser.add_argument(
+        "--stats-only",
+        action="store_true",
+        help="Only compute statistics for existing station files (requires --output-dir to exist)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
-    
-    # Validate input directories
+
+    # Handle stats-only mode
+    if args.stats_only:
+        if not args.output_dir.exists():
+            logger.error("Output directory does not exist: %s", args.output_dir)
+            return
+
+        logger.info("Running statistics calculation only on %s", args.output_dir)
+        compute_all_station_statistics(args.output_dir)
+        export_metadata_to_csv(args.output_dir)
+        logger.info("Statistics calculation complete")
+        return
+
+    # Handle metadata-only mode
+    if args.metadata_only:
+        if not args.output_dir.exists():
+            logger.error("Output directory does not exist: %s", args.output_dir)
+            return
+
+        logger.info("Running metadata-only mode on %s", args.output_dir)
+
+        # Merge metadata databases
+        if merge_metadata_databases(args.merged_dir, args.merged1_dir, args.output_dir):
+            logger.info("Metadata databases merged successfully")
+
+            # Compute statistics for all stations in output directory
+            logger.info("Computing statistics for all stations...")
+            compute_all_station_statistics(args.output_dir)
+
+            # Export to CSV for compatibility
+            logger.info("Exporting metadata to CSV...")
+            export_metadata_to_csv(args.output_dir)
+        else:
+            logger.warning("Metadata merge failed")
+
+        logger.info("Metadata-only mode complete")
+        return
+
+    # Validate input directories for full combine
     if not args.merged_dir.exists():
         logger.error("Merged directory does not exist: %s", args.merged_dir)
         return
-    
+
     if not args.merged1_dir.exists():
         logger.error("Merged-1 directory does not exist: %s", args.merged1_dir)
         return

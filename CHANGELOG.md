@@ -2,6 +2,29 @@
 
 ## [Unreleased] - Performance Optimizations
 
+### Bug Fixes
+
+#### 2026-01-17 - Metadata Merge Schema Mismatch Fix
+
+- **Fixed SQL schema mismatch error in `combine_datasets.py`**
+  - The `merge_metadata_databases()` function was using `SELECT * FROM stations` which assumed both source databases had the same schema
+  - This caused errors when merging databases with different schema versions (e.g., 7 columns vs 30 columns)
+  - Now dynamically reads column names from each source database and only inserts columns that exist in both source and output schemas
+  - Fixed the same issue for `year_counts` table by explicitly selecting the three required columns
+
+- **Added new command-line options to `combine_datasets.py`**
+  - `--metadata-only`: Runs only metadata merge and statistics calculation, skipping station data combining. Useful when station data is already combined but metadata merge failed.
+  - `--stats-only`: Only computes statistics for existing station files in the output directory. Useful for recalculating statistics without re-merging.
+
+**Usage:**
+```bash
+# Run metadata merge and statistics only (after station data is already combined)
+python combine_datasets.py --metadata-only --output-dir ../data/merged-stations
+
+# Recalculate statistics only
+python combine_datasets.py --stats-only --output-dir ../data/merged-stations
+```
+
 ### Optimizations Implemented
 
 #### 2025-01-XX - Low-Hanging Fruit Optimizations
