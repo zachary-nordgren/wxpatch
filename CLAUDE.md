@@ -4,107 +4,142 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NOAA Weather Data Processor - Downloads and processes NOAA Global Hourly weather data to create a complete, accurate historical weather dataset for the continental USA. Uses Polars for fast CSV/Parquet operations with multi-threaded processing.
+Weather Imputation Research - Downloads and processes NOAA GHCNh (Global Historical Climatology Network hourly) parquet files for weather data imputation research. Uses Polars for fast DataFrame operations and Rich for progress display.
+
+## Setup
+
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Sync dependencies
+uv sync
+
+# Run scripts
+uv run python src/scripts/ghcnh_downloader.py --help
+uv run python src/scripts/compute_metadata.py --help
+uv run python src/scripts/clean_metadata.py --help
+```
 
 ## Common Commands
 
 ```bash
-# Install dependencies
-pip install requests tqdm polars psutil
+# Download GHCNh parquet files
+uv run python src/scripts/ghcnh_downloader.py                    # Download all years, North America stations
+uv run python src/scripts/ghcnh_downloader.py --year 2024        # Specific year
+uv run python src/scripts/ghcnh_downloader.py --year 2020:2024   # Year range
+uv run python src/scripts/ghcnh_downloader.py --all-stations     # All stations (not just North America)
+uv run python src/scripts/ghcnh_downloader.py --list-years       # List available years
+uv run python src/scripts/ghcnh_downloader.py --status           # Show download status
 
-# Full download and process (from src/ directory)
-python main.py
+# Compute station metadata
+uv run python src/scripts/compute_metadata.py compute            # Compute all
+uv run python src/scripts/compute_metadata.py compute --years 2023,2024
+uv run python src/scripts/compute_metadata.py show               # Display metadata
+uv run python src/scripts/compute_metadata.py stats              # Show statistics
 
-# Download only (no processing)
-python main.py --download-only
-
-# Process already-downloaded archives
-python main.py --process-only
-
-# Process specific years
-python main.py --year-filter 2020,2021,2022
-python main.py --year-filter 2010:2015,2020  # Range plus single year
-
-# Process newest years first
-python main.py --newest-first
-
-# Update dataset from last observation to present
-python update_dataset.py
-python update_dataset.py --no-stats  # Skip statistics (faster)
-
-# Combine two merged datasets
-python combine_datasets.py
-python combine_datasets.py --parquet  # Output as Parquet
-
-# Sort all station files chronologically
-python main.py --sort-chronologically
-
-# Control parallelism (default: 14 workers)
-python main.py --max-workers 20
-
-# Clean up (preserves raw downloads)
-python main.py --clean
-
-# Recover corrupted metadata
-python main.py --recover-metadata
+# Clean metadata
+uv run python src/scripts/clean_metadata.py clean                # Run cleaning pipeline
+uv run python src/scripts/clean_metadata.py clean --dry-run      # Preview changes
+uv run python src/scripts/clean_metadata.py duplicates           # List duplicate stations
+uv run python src/scripts/clean_metadata.py validate             # Validate coordinates
+uv run python src/scripts/clean_metadata.py report               # Show cleaning report
 ```
 
 ## Architecture
 
-### Entry Points
-- `main.py` - Main orchestrator for downloading and processing
-- `update_dataset.py` - Incremental updates from last observation date to present
-- `combine_datasets.py` - Merge two dataset directories into one
+### Package Structure
 
-### Core Processing Pipeline
-1. **downloader.py** - Fetches tar.gz archives from NOAA servers
-2. **processor_core.py** - Producer/consumer pattern for archive processing
-   - `StationProcessor` class handles extraction and processing threads
-   - Extraction workers read from tar archives into queue
-   - Processing workers consume queue and merge station data
-3. **csv_merger.py** - Filters CSV data and merges with Polars
-4. **file_io.py** - Directory setup and file modification tracking
-
-### Metadata System
-- `metadata_manager.py` - SQLite-based metadata storage with thread-safe connections
-- Database at `data/merged/wx_metadata.db` with stations and year_counts tables
-- Exports to `wx_info.csv` for compatibility
-- Statistics include: completeness percentages, temperature/pressure stats, gap analysis
-
-### Configuration
-- `config.py` - All paths, URLs, and tunable parameters
-- Data directories relative to `src/`: `../data/raw/`, `../data/merged/`, `../data/temp/`
-
-### Key Data Flow
 ```
-NOAA Archives (.tar.gz) → Extract to temp → Filter CSV → Merge by station → Compress (csv.gz/parquet)
-                                                      → Update SQLite metadata
+src/
+├── weather_imputation/           # Main package
+│   ├── config/                   # Configuration
+│   │   ├── paths.py             # Directory and file paths
+│   │   └── download.py          # Download settings
+│   ├── data/                    # Data loading and processing
+│   │   ├── ghcnh_loader.py      # Load parquet files
+│   │   ├── metadata.py          # Compute/save metadata
+│   │   ├── stats.py             # Statistics calculations
+│   │   └── cleaning.py          # Dedup, coordinate lookup
+│   ├── models/                  # Imputation methods
+│   │   ├── base.py              # BaseImputer protocol
+│   │   └── classical/           # Linear, spline, MICE
+│   ├── training/                # Training infrastructure
+│   │   ├── trainer.py           # Training loop
+│   │   ├── callbacks.py         # Logging, checkpointing
+│   │   └── checkpoint.py        # Checkpoint management
+│   ├── evaluation/              # Evaluation framework
+│   │   ├── metrics.py           # RMSE, MAE, R², CRPS
+│   │   ├── statistical.py       # Significance tests
+│   │   └── stratified.py        # Gap-length, seasonal analysis
+│   └── utils/                   # Utilities
+│       ├── progress.py          # Rich progress bars
+│       ├── parsing.py           # Year/station filters
+│       ├── filesystem.py        # Directory utilities
+│       └── system.py            # System resource checks
+├── scripts/                     # CLI entry points
+│   ├── ghcnh_downloader.py      # Download GHCNh files
+│   ├── compute_metadata.py      # Compute metadata
+│   └── clean_metadata.py        # Clean/dedupe metadata
+└── ...
 ```
 
-### Parallelism Model
-- Archives processed sequentially
-- Files within each archive processed concurrently via producer/consumer queues
-- Fixed extraction workers (1) + configurable processing workers (default: 13)
-- Thread-local SQLite connections with semaphore limiting (max 3 concurrent)
+### Data Directory Structure
 
-## Output Format
+```
+data/
+├── raw/ghcnh/                   # Downloaded parquet files
+│   ├── 2020/
+│   │   ├── USW00003046.parquet
+│   │   └── ...
+│   └── 2024/
+│       └── ...
+└── processed/                   # Computed metadata
+    ├── metadata.parquet         # Raw computed metadata
+    ├── metadata_cleaned.parquet # After cleaning
+    ├── metadata.csv             # Human-readable export
+    └── cleaning_report.json     # Cleaning summary
+```
 
-Station data files: `data/merged/{station_id}.csv.gz` or `.parquet`
-- DATE column in ISO format: `YYYY-MM-DDTHH:MM:SS`
-- Weather fields contain value,quality,source format (e.g., TMP: `215,1,1`)
+### GHCNh Data Format
 
-## Logging
+Each parquet file contains hourly observations with 234 columns:
+- **Primary**: STATION, Station_name, DATE, LATITUDE, LONGITUDE
+- **Weather variables** (38 variables × 6 attributes each):
+  - temperature, dew_point_temperature, sea_level_pressure
+  - wind_direction, wind_speed, relative_humidity
+  - visibility, wind_gust, precipitation, etc.
+  - Each variable has: value, Quality_Code, Measurement_Code, Report_Type_Code, Source_Code, units
 
-Log file: `src/weather_data_processing.log`
-Use `--verbose` for debug output, `--quiet` for warnings only.
+### Metadata Schema
+
+Computed metadata includes:
+- Station identifiers and location
+- Temporal coverage (first/last observation, years available)
+- Per-variable completeness percentages (filtered by quality codes)
+- Temperature, dew point, pressure statistics
+- Gap analysis (24h gaps, max gap duration, avg interval)
 
 ## Development Guidelines
 
+### Adding New Imputation Methods
+
+1. Create a new file in `src/weather_imputation/models/classical/`
+2. Inherit from `BaseImputer` in `models/base.py`
+3. Implement required methods: `fit()`, `transform()`, `get_params()`, `name`
+
+### Code Style
+
+- Use Ruff for linting: `uv run ruff check src/`
+- Use mypy for type checking: `uv run mypy src/`
+- Run tests: `uv run pytest tests/`
+
 ### Changelog
-**Always update `CHANGELOG.md` when making changes to the codebase.** Include:
+
+**Always update `CHANGELOG.md` when making changes.** Include:
 - Bug fixes with date and description
 - New features and command-line options
 - Breaking changes
 - Performance improvements
 
-Format entries with the date (YYYY-MM-DD) and clear descriptions of what changed and why.
+Format entries with the date (YYYY-MM-DD) and clear descriptions.

@@ -1,6 +1,93 @@
 # Changelog
 
-## [Unreleased] - Performance Optimizations
+## [0.2.0] - 2026-01-18 - Architecture Migration
+
+### Breaking Changes
+
+#### Complete Architecture Migration to GHCNh Parquet
+
+This release completely restructures the project from legacy ISD tar.gz-based processing to a modern GHCNh parquet-based architecture for weather imputation research.
+
+**Removed (~2,600 lines of legacy code):**
+- `downloader.py` - ISD tar.gz downloader
+- `processor_core.py` - Tar.gz extraction queue
+- `csv_merger.py` - ISD CSV filtering/merging
+- `update_dataset.py` - Incremental ISD updates
+- `verification.py` - CSV timestamp verification
+- `combine_datasets.py` - Merge two datasets
+- `main.py` - ISD orchestration
+- `repair_stations.py` - ISD datetime fix utility
+- `metadata_manager.py` - SQLite-based metadata
+- `file_io.py` - Legacy file utilities
+- `utils.py` - Legacy utilities
+- `config.py` - Legacy configuration
+
+**New Package Structure:**
+```
+src/
+├── weather_imputation/           # Main package
+│   ├── config/                   # paths.py, download.py
+│   ├── data/                     # ghcnh_loader.py, metadata.py, stats.py, cleaning.py
+│   ├── models/                   # base.py, classical/{linear.py, spline.py, mice.py}
+│   ├── training/                 # trainer.py, callbacks.py, checkpoint.py
+│   ├── evaluation/               # metrics.py, statistical.py, stratified.py
+│   └── utils/                    # progress.py, parsing.py, filesystem.py, system.py
+└── scripts/                      # ghcnh_downloader.py, compute_metadata.py, clean_metadata.py
+```
+
+**Key Changes:**
+- Parquet files kept separate by station/year (no merging)
+- SQLite metadata → Parquet metadata with cleaning/deduplication
+- tqdm → rich.progress for all progress display
+- `uv` for dependency locking
+
+### New Features
+
+#### New CLI Scripts
+
+- **`compute_metadata.py`** - Compute station metadata from parquet files
+  ```bash
+  uv run python src/scripts/compute_metadata.py compute
+  uv run python src/scripts/compute_metadata.py compute --years 2023,2024
+  uv run python src/scripts/compute_metadata.py show
+  uv run python src/scripts/compute_metadata.py stats
+  ```
+
+- **`clean_metadata.py`** - Clean and deduplicate station metadata
+  ```bash
+  uv run python src/scripts/clean_metadata.py clean
+  uv run python src/scripts/clean_metadata.py clean --dry-run
+  uv run python src/scripts/clean_metadata.py duplicates
+  uv run python src/scripts/clean_metadata.py validate
+  uv run python src/scripts/clean_metadata.py report
+  ```
+
+#### Metadata Cleaning Features
+
+- **Duplicate detection** - Find stations with same location (lat/lon within threshold)
+- **Duplicate merging** - Merge duplicate stations with configurable strategy
+- **Coordinate lookup** - Fill missing lat/lon/elevation from station list
+- **Coordinate validation** - Validate coordinate ranges, flag outliers
+- **Name normalization** - Clean and standardize station names
+
+#### Rich Progress Display
+
+- All progress bars now use Rich library instead of tqdm
+- Download progress with speed and ETA
+- Processing progress with completed/total counts
+- Spinners for indeterminate operations
+- Formatted summary tables
+
+#### Imputation Framework (Scaffolding)
+
+- **BaseImputer** protocol for consistent imputation interface
+- **Classical imputers**: LinearInterpolationImputer, AkimaSplineImputer, MICEImputer
+- **Training infrastructure**: Trainer, callbacks, checkpoint management
+- **Evaluation framework**: RMSE, MAE, R², CRPS metrics, stratified analysis
+
+---
+
+## [0.1.x] - Previous Releases
 
 ### New Features
 
