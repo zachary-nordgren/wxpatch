@@ -103,6 +103,7 @@ data/
 
 ### GHCNh Data Format
 
+The official GHCNh documentation is present locally at `docs/ghcnh_DOCUMENTATION.pdf`
 Each parquet file contains hourly observations with 234 columns:
 - **Primary**: STATION, Station_name, DATE, LATITUDE, LONGITUDE
 - **Weather variables** (38 variables × 6 attributes each):
