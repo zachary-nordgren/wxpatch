@@ -4,7 +4,19 @@
 
 ### Bug Fixes
 
-#### 2026-01-17 - Metadata Merge Schema Mismatch Fix
+#### 2026-01-17 - Metadata Statistics Bug Fixes
+
+- **Fixed `compute_all_station_statistics()` using wrong database path in `combine_datasets.py`**
+  - The function was not updating `metadata_manager.DB_PATH` before computing statistics
+  - This caused statistics to be written to the wrong database (default path instead of output directory)
+  - Also caused potential hangs when `_initialize_database_internal()` tried to import from a large `wx_info.csv`
+  - Now properly sets `DB_PATH`, `LEGACY_CSV_PATH`, and resets `_is_initialized` to use the output directory
+  - Uses try/finally to ensure paths are restored after completion
+
+- **Fixed O(n) gap calculation loop in `compute_station_statistics()` in `metadata_manager.py`**
+  - The gap calculation was iterating through millions of rows in pure Python, causing hangs
+  - Now uses vectorized Polars operations (`diff()`, `filter()`) for much faster computation
+  - Performance improvement: O(n) Python loop -> O(1) Polars vectorized operation
 
 - **Fixed SQL schema mismatch error in `combine_datasets.py`**
   - The `merge_metadata_databases()` function was using `SELECT * FROM stations` which assumed both source databases had the same schema

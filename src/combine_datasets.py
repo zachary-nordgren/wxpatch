@@ -571,34 +571,50 @@ def combine_datasets(
 def compute_all_station_statistics(output_dir: Path):
     """
     Compute statistics for all station files in the output directory.
-    
+
     Args:
         output_dir: Path to output directory containing station files
     """
+    import metadata_manager
     from metadata_manager import update_station_statistics
-    
-    # Get all station files
-    station_files = list(output_dir.glob("*.csv.gz")) + list(output_dir.glob("*.parquet"))
-    
-    if not station_files:
-        logger.warning("No station files found in %s", output_dir)
-        return
-    
-    logger.info("Computing statistics for %d stations...", len(station_files))
-    
-    success_count = 0
-    failed_count = 0
-    
-    for station_file in tqdm(station_files, desc="Computing statistics", unit="station"):
-        try:
-            station_id = station_file.stem.replace(".csv", "")
-            update_station_statistics(station_id, station_file)
-            success_count += 1
-        except Exception as e:
-            logger.error("Error computing statistics for %s: %s", station_file.name, e)
-            failed_count += 1
-    
-    logger.info("Computed statistics for %d stations, %d failed", success_count, failed_count)
+
+    # Temporarily set the DB path to point to output directory
+    original_db_path = metadata_manager.DB_PATH
+    original_csv_path = metadata_manager.LEGACY_CSV_PATH
+    original_is_initialized = metadata_manager._is_initialized
+
+    metadata_manager.DB_PATH = output_dir / "wx_metadata.db"
+    metadata_manager.LEGACY_CSV_PATH = output_dir / "wx_info.csv"
+    metadata_manager._is_initialized = False  # Force re-initialization with new path
+
+    try:
+        # Get all station files
+        station_files = list(output_dir.glob("*.csv.gz")) + list(output_dir.glob("*.parquet"))
+
+        if not station_files:
+            logger.warning("No station files found in %s", output_dir)
+            return
+
+        logger.info("Computing statistics for %d stations...", len(station_files))
+
+        success_count = 0
+        failed_count = 0
+
+        for station_file in tqdm(station_files, desc="Computing statistics", unit="station"):
+            try:
+                station_id = station_file.stem.replace(".csv", "")
+                update_station_statistics(station_id, station_file)
+                success_count += 1
+            except Exception as e:
+                logger.error("Error computing statistics for %s: %s", station_file.name, e)
+                failed_count += 1
+
+        logger.info("Computed statistics for %d stations, %d failed", success_count, failed_count)
+    finally:
+        # Restore original paths
+        metadata_manager.DB_PATH = original_db_path
+        metadata_manager.LEGACY_CSV_PATH = original_csv_path
+        metadata_manager._is_initialized = original_is_initialized
 
 
 def main():

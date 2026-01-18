@@ -510,18 +510,17 @@ def compute_station_statistics(station_file_path: Path) -> Dict[str, Optional[fl
                 if last_date is not None:
                     stats["last_observation_date"] = last_date.strftime("%Y-%m-%dT%H:%M:%S")
                 
-                # Calculate gap metrics
+                # Calculate gap metrics using vectorized operations
                 if len(valid_dates) > 1:
                     sorted_dates = valid_dates.sort()
-                    gaps = []
-                    for i in range(len(sorted_dates) - 1):
-                        gap = (sorted_dates[i + 1] - sorted_dates[i]).total_seconds() / 3600.0
-                        if gap > 24:  # Consider gaps > 24 hours as significant
-                            gaps.append(gap)
-                    
-                    stats["gap_count"] = len(gaps)
-                    stats["max_gap_duration_hours"] = max(gaps) if gaps else 0.0
-                    
+                    # Use vectorized diff to calculate gaps in hours
+                    gaps_series = sorted_dates.diff().dt.total_seconds() / 3600.0
+                    # Filter to significant gaps (> 24 hours)
+                    significant_gaps = gaps_series.filter(gaps_series > 24)
+
+                    stats["gap_count"] = len(significant_gaps)
+                    stats["max_gap_duration_hours"] = float(significant_gaps.max()) if len(significant_gaps) > 0 else 0.0
+
                     # Calculate observation frequency (average hours between observations)
                     total_hours = (last_date - first_date).total_seconds() / 3600.0
                     if total_hours > 0:
