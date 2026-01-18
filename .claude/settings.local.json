@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /b:*)",
+      "Read(//m/**)",
+      "Bash(powershell -Command:*)",
+      "Bash(python:*)",
+      "Bash(findstr:*)",
+      "Bash(cd:*)",
+      "Bash(curl:*)"
+    ]
+  }
+}

@@ -2,7 +2,86 @@
 
 ## [Unreleased] - Performance Optimizations
 
+### New Features
+
+#### 2026-01-18 - New GHCNh Parquet Downloader
+
+- **Added new downloader for GHCNh (Global Historical Climatology Network hourly) data**
+  - The old data source (ISD Global Hourly CSV archives) has reached end of life
+  - New source: NOAA GHCNh parquet files via S3-style API
+  - Downloads individual station parquet files directly (no tar.gz extraction needed)
+  - Data spans 1790 to present with 237 years available
+
+- **New script: `ghcnh_downloader.py`**
+  - Downloads parquet files to `data/raw/ghcnh/{year}/` directory structure
+  - Filters to US stations by default (saves bandwidth)
+  - Supports year ranges: `--year 2020:2024` or `--year 2020,2022,2024`
+
+- **Enhanced download features:**
+  - **Automatic retries** with exponential backoff
+  - **Adaptive rate limiting** - automatically reduces concurrency when rate limited
+  - **Resume/restart capability** - tracks progress in `.download_state.json`
+  - **Rich progress bars** with bandwidth estimates and ETA
+  - **Concurrent downloads** - up to 12 parallel downloads (auto-tuned)
+  - **State persistence** - interrupted downloads resume from where they left off
+
+- **Usage:**
+  ```bash
+  # Download all years (US stations only)
+  python ghcnh_downloader.py
+
+  # Download specific year
+  python ghcnh_downloader.py --year 2024
+
+  # Download year range
+  python ghcnh_downloader.py --year 2020:2024
+
+  # Download all stations globally
+  python ghcnh_downloader.py --all-stations
+
+  # List available years
+  python ghcnh_downloader.py --list-years
+
+  # Check download status
+  python ghcnh_downloader.py --status
+
+  # Force re-download
+  python ghcnh_downloader.py --force
+  ```
+
+- **Note:** This is a new downloader for raw data. Processing/merging scripts will need updates to handle the new GHCNh parquet format (234 columns, pipe-separated quality codes vs. the old ISD format).
+
 ### Bug Fixes
+
+#### 2026-01-18 - Datetime Parsing Bug Fix Applied to All Files
+
+- **Extended datetime parsing fix to all files that parse DATE columns**
+  - The same microseconds parsing bug that was fixed in `combine_datasets.py` existed in 5 other files
+  - NOAA source data has inconsistent date formats: some files have microseconds (`2014-01-01T00:15:00.000000`), others don't
+  - All files now use the two-step parsing: try `%Y-%m-%dT%H:%M:%S%.f` first, fall back to `%Y-%m-%dT%H:%M:%S`
+  - **Files fixed**:
+    - `update_dataset.py` - `get_latest_date_from_files()` function
+    - `csv_merger.py` - `merge_csv_data_with_polars()` function
+    - `file_io.py` - `write_station_data_to_disk()` function
+    - `processor_core.py` - `write_station_data()` and `sort_station_file()` functions
+    - `metadata_manager.py` - `compute_station_statistics()` function
+  - Also removed unused `from io import StringIO` import in `update_dataset.py`
+
+#### 2026-01-17 - Datetime Parsing Bug Fix in combine_datasets.py
+
+- **Fixed critical datetime parsing bug that caused massive data loss during dataset combining**
+  - The `read_station_file()` function was using `%Y-%m-%dT%H:%M:%S` format for datetime parsing
+  - This failed to parse dates with microseconds (format: `2014-01-01T00:15:00.000000`)
+  - When parsing failed, all dates became null, and deduplication on null dates collapsed all rows to just 2
+  - **Impact**: 1,575 stations lost data (e.g., 293,726 rows reduced to 2 rows)
+  - **Fix**: Now tries `%Y-%m-%dT%H:%M:%S%.f` format first (handles microseconds), then falls back to `%Y-%m-%dT%H:%M:%S`
+  - Created `repair_stations.py` utility script to identify and repair affected stations
+
+- **Added new utility script: `repair_stations.py`**
+  - Scans output directory for stations with suspiciously few rows (< 10 by default)
+  - Re-combines affected stations using the fixed datetime parsing logic
+  - Supports dry-run mode to identify problems without making changes
+  - Usage: `python repair_stations.py [--dry-run] [--threshold 10]`
 
 #### 2026-01-17 - Metadata Statistics Bug Fixes
 

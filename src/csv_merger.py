@@ -245,9 +245,11 @@ def merge_csv_data_with_polars(existing_content: str, new_content: str) -> str:
                 return None
 
             # Handle DATE column parsing if present
+            # Try with microseconds first, then without (NOAA data has inconsistent formats)
             if "DATE" in df.columns:
                 df = df.with_columns(
-                    [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                    [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                     .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                 )
 
             # Fill nulls and cast non-date columns to strings in one operation

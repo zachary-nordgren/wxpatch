@@ -96,13 +96,16 @@ def write_station_data_to_disk(
                 )
 
                 # Handle DATE column if present
+                # Try with microseconds first, then without (NOAA data has inconsistent formats)
                 if "DATE" in existing_df.columns:
                     existing_df = existing_df.with_columns(
-                        [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                        [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                         .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                     )
                 if "DATE" in new_df.columns:
                     new_df = new_df.with_columns(
-                        [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                        [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                         .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                     )
 
                 # Fill nulls and cast to strings (except DATE)

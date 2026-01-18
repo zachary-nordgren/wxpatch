@@ -494,9 +494,11 @@ def compute_station_statistics(station_file_path: Path) -> Dict[str, Optional[fl
             return stats
         
         # Parse DATE column if present
+        # Try with microseconds first, then without (NOAA data has inconsistent formats)
         if "DATE" in df.columns:
             df = df.with_columns(
-                [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                 .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
             )
             
             # Get first and last observation dates

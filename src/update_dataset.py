@@ -86,7 +86,6 @@ def get_latest_date_from_files(merged_dir: Path) -> Optional[datetime]:
     """
     import gzip
     import polars as pl
-    from io import StringIO
     
     logger.info("Scanning station files for latest date...")
     station_files = list(merged_dir.glob("*.csv.gz")) + list(merged_dir.glob("*.parquet"))
@@ -121,9 +120,11 @@ def get_latest_date_from_files(merged_dir: Path) -> Optional[datetime]:
                 continue
             
             if "DATE" in df.columns and df.shape[0] > 0:
-                # Parse dates
+                # Parse dates - try with microseconds first, then without
+                # (NOAA data has inconsistent formats)
                 df = df.with_columns(
-                    [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                    [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                     .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                 )
                 date_col = df["DATE"]
                 valid_dates = date_col.filter(date_col.is_not_null())

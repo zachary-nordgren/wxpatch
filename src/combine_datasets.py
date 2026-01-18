@@ -88,10 +88,12 @@ def read_station_file(file_path: Path) -> Optional[pl.DataFrame]:
             logger.warning("Unknown file format for %s", file_path)
             return None
         
-        # Handle DATE column if present
+        # Handle DATE column if present - try multiple datetime formats
         if "DATE" in df.columns and df["DATE"].dtype == pl.Utf8:
+            # Try with microseconds first, then without
             df = df.with_columns(
-                [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                 .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
             )
         
         return df

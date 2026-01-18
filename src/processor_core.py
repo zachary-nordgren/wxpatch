@@ -308,13 +308,16 @@ class StationProcessor:
                     )
 
                     # Handle DATE column if present
+                    # Try with microseconds first, then without (NOAA data has inconsistent formats)
                     if "DATE" in existing_df.columns:
                         existing_df = existing_df.with_columns(
-                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                             .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                         )
                     if "DATE" in new_df.columns:
                         new_df = new_df.with_columns(
-                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                            [pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                             .fill_null(pl.col("DATE").str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                         )
 
                     # Fill nulls and cast to strings (except DATE)
@@ -799,9 +802,11 @@ def sort_station_files_chronologically():
                 return False
 
             # Parse date column if it's a string
+            # Try with microseconds first, then without (NOAA data has inconsistent formats)
             if df[date_col_name].dtype == pl.Utf8:
                 df = df.with_columns(
-                    [pl.col(date_col_name).str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)]
+                    [pl.col(date_col_name).str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False)
+                     .fill_null(pl.col(date_col_name).str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False))]
                 )
 
             # Drop duplicates and sort
