@@ -29,9 +29,9 @@ def get_station_year_path(station_id: str, year: int) -> Path:
         year: Year of the data file
 
     Returns:
-        Path to the parquet file: data/raw/ghcnh/{year}/{station_id}.parquet
+        Path to the parquet file: data/raw/ghcnh/{year}/GHCNh_{station_id}_{year}.parquet
     """
-    return GHCNH_RAW_DIR / str(year) / f"{station_id}.parquet"
+    return GHCNH_RAW_DIR / str(year) / f"GHCNh_{station_id}_{year}.parquet"
 
 
 def get_year_dir(year: int) -> Path:

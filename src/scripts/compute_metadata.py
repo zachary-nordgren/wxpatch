@@ -22,6 +22,7 @@ from weather_imputation.data.metadata import (
     compute_all_metadata,
     load_metadata,
     save_metadata,
+    enrich_metadata_from_station_list,
 )
 from weather_imputation.utils.parsing import parse_year_filter, parse_station_filter
 from weather_imputation.utils.progress import (
@@ -111,6 +112,10 @@ def compute(
     if len(metadata_df) == 0:
         print_warning("No metadata computed. Check that parquet files exist.")
         raise typer.Exit(1)
+
+    # Enrich with NOAA station inventory (lat/lon/elevation, WMO ID, ICAO, etc.)
+    console.print("\n[bold]Enriching metadata from NOAA station inventory...[/bold]")
+    metadata_df = enrich_metadata_from_station_list(metadata_df)
 
     # Save metadata
     save_metadata(metadata_df, cleaned=False, export_csv=export_csv)

@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.2.1] - 2026-01-18 - Metadata Fixes and Station Inventory Integration
+
+### Bug Fixes
+
+- **Fixed DATE column parsing in metadata computation**
+  - GHCNh parquet files store DATE as string (ISO format like "2024-01-01T12:00:00")
+  - Now properly parses string dates to datetime before using `.dt.year()` operations
+  - Fixes error: `year operation not supported for dtype str`
+
+- **Fixed column name mismatches**
+  - GHCNh parquet files use mixed-case column names (e.g., `Latitude` not `LATITUDE`)
+  - Now handles both uppercase and mixed-case variants
+
+- **Fixed file naming convention in loader**
+  - Parquet files are named `GHCNh_{station_id}_{year}.parquet`
+  - `list_all_stations()` now correctly extracts station IDs from filenames
+  - `list_available_years()` now finds files with the correct naming pattern
+
+- **Fixed station list CSV parsing**
+  - Added schema overrides for WMO_ID, ICAO, and other mixed-type columns
+  - Handles Windows line ending artifacts in column names
+
+### New Features
+
+- **NOAA Station Inventory Integration**
+  - `compute_metadata.py` now automatically enriches metadata from NOAA's official station list
+  - Downloads `ghcnh-station-list.csv` from NOAA if not present locally
+  - Fills in missing latitude, longitude, elevation from inventory
+  - Adds new fields: `state`, `wmo_id`, `icao_code`
+  - Example: stations with null lat/lon in parquet files now get coordinates from inventory
+
+- **New function: `download_station_list()`**
+  - Downloads official GHCNh station list from NOAA
+  - Saves to `data/raw/ghcnh/ghcnh-station-list.csv`
+
+- **New function: `enrich_metadata_from_station_list()`**
+  - Joins computed metadata with NOAA station inventory
+  - Fills missing values for lat/lon/elevation/station_name
+  - Adds WMO ID and ICAO code fields
+
+---
+
 ## [0.2.0] - 2026-01-18 - Architecture Migration
 
 ### Breaking Changes
