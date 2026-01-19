@@ -20,6 +20,7 @@ from rich.table import Table
 from weather_imputation.config.paths import METADATA_PARQUET, PROCESSED_DIR
 from weather_imputation.data.metadata import (
     compute_all_metadata,
+    compute_all_metadata_incremental,
     load_metadata,
     save_metadata,
     enrich_metadata_from_station_list,
@@ -63,7 +64,12 @@ def compute(
     force: bool = typer.Option(
         False,
         "--force", "-f",
-        help="Recompute even if metadata exists",
+        help="Recompute all stations even if metadata exists",
+    ),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental", "-i",
+        help="Only recompute metadata for stations with modified files",
     ),
     export_csv: bool = typer.Option(
         True,
@@ -76,12 +82,6 @@ def compute(
     """Compute station metadata from GHCNh parquet files."""
     setup_logging(verbose, quiet)
 
-    # Check if metadata already exists
-    if METADATA_PARQUET.exists() and not force:
-        print_warning(f"Metadata file already exists: {METADATA_PARQUET}")
-        print_info("Use --force to recompute")
-        raise typer.Exit(0)
-
     # Parse filters
     year_filter = parse_year_filter(years) if years else None
     station_filter = parse_station_filter(stations) if stations else None
@@ -91,42 +91,89 @@ def compute(
     if station_filter:
         print_info(f"Station filter: {station_filter[:5]}{'...' if len(station_filter) > 5 else ''}")
 
+    # Handle existing metadata
+    if METADATA_PARQUET.exists() and not force and not incremental:
+        print_warning(f"Metadata file already exists: {METADATA_PARQUET}")
+        print_info("Use --force to recompute all, or --incremental to update only changed stations")
+        raise typer.Exit(0)
+
     # Create output directory
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Compute metadata with progress
-    console.print("\n[bold]Computing station metadata...[/bold]")
+    if incremental:
+        # Incremental mode: only compute for stations with modified files
+        console.print("\n[bold]Computing station metadata (incremental mode)...[/bold]")
 
-    with create_processing_progress() as progress:
-        task_id = progress.add_task("Computing metadata", total=None)
+        with create_processing_progress() as progress:
+            task_id = progress.add_task("Computing metadata", total=None)
 
-        def progress_callback(current: int, total: int, station: str) -> None:
-            progress.update(task_id, total=total, completed=current, description=f"Processing {station}")
+            def progress_callback(current: int, total: int, station: str) -> None:
+                progress.update(task_id, total=total, completed=current, description=f"Processing {station}")
 
-        metadata_df = compute_all_metadata(
-            year_filter=year_filter,
-            station_filter=station_filter,
-            progress_callback=progress_callback,
-        )
+            metadata_df, updated_count, unchanged_count = compute_all_metadata_incremental(
+                year_filter=year_filter,
+                station_filter=station_filter,
+                progress_callback=progress_callback,
+            )
 
-    if len(metadata_df) == 0:
-        print_warning("No metadata computed. Check that parquet files exist.")
-        raise typer.Exit(1)
+        if len(metadata_df) == 0:
+            print_warning("No metadata computed. Check that parquet files exist.")
+            raise typer.Exit(1)
 
-    # Enrich with NOAA station inventory (lat/lon/elevation, WMO ID, ICAO, etc.)
-    console.print("\n[bold]Enriching metadata from NOAA station inventory...[/bold]")
-    metadata_df = enrich_metadata_from_station_list(metadata_df)
+        if updated_count == 0:
+            print_info("No stations needed updating - all metadata is current")
+            raise typer.Exit(0)
 
-    # Save metadata
-    save_metadata(metadata_df, cleaned=False, export_csv=export_csv)
+        # Enrich with NOAA station inventory (lat/lon/elevation, WMO ID, ICAO, etc.)
+        console.print("\n[bold]Enriching metadata from NOAA station inventory...[/bold]")
+        metadata_df = enrich_metadata_from_station_list(metadata_df)
 
-    # Print summary
-    print_success(f"Computed metadata for {len(metadata_df)} stations")
-    print_summary_table("Metadata Summary", {
-        "Total stations": len(metadata_df),
-        "Output file": str(METADATA_PARQUET),
-        "CSV export": str(export_csv),
-    })
+        # Save metadata
+        save_metadata(metadata_df, cleaned=False, export_csv=export_csv)
+
+        # Print summary
+        print_success(f"Updated metadata for {updated_count} stations ({unchanged_count} unchanged)")
+        print_summary_table("Metadata Summary", {
+            "Stations updated": updated_count,
+            "Stations unchanged": unchanged_count,
+            "Total stations": len(metadata_df),
+            "Output file": str(METADATA_PARQUET),
+            "CSV export": str(export_csv),
+        })
+    else:
+        # Full recompute mode
+        console.print("\n[bold]Computing station metadata...[/bold]")
+
+        with create_processing_progress() as progress:
+            task_id = progress.add_task("Computing metadata", total=None)
+
+            def progress_callback(current: int, total: int, station: str) -> None:
+                progress.update(task_id, total=total, completed=current, description=f"Processing {station}")
+
+            metadata_df = compute_all_metadata(
+                year_filter=year_filter,
+                station_filter=station_filter,
+                progress_callback=progress_callback,
+            )
+
+        if len(metadata_df) == 0:
+            print_warning("No metadata computed. Check that parquet files exist.")
+            raise typer.Exit(1)
+
+        # Enrich with NOAA station inventory (lat/lon/elevation, WMO ID, ICAO, etc.)
+        console.print("\n[bold]Enriching metadata from NOAA station inventory...[/bold]")
+        metadata_df = enrich_metadata_from_station_list(metadata_df)
+
+        # Save metadata
+        save_metadata(metadata_df, cleaned=False, export_csv=export_csv)
+
+        # Print summary
+        print_success(f"Computed metadata for {len(metadata_df)} stations")
+        print_summary_table("Metadata Summary", {
+            "Total stations": len(metadata_df),
+            "Output file": str(METADATA_PARQUET),
+            "CSV export": str(export_csv),
+        })
 
 
 @app.command()

@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.2.3] - 2026-01-18 - Schema Inconsistency Fixes
+
+### Bug Fixes
+
+- **Fixed Struct-type quality code columns causing concat errors**
+  - Some parquet files have quality code columns as `Struct({'member0': Int32, 'member1': String})` instead of simple `Int32`
+  - Schema varies across years for the same station (e.g., 2020 has Struct, 2021 has Int32)
+  - Added `_normalize_schema()` function to extract integer values from Struct columns before concatenation
+  - Fixes error: `must specify one field in the struct`
+  - Affected stations include MXM00068550 and others with mixed year schemas
+
+- **Fixed string-typed numeric columns causing mean() errors**
+  - Some parquet files have numeric columns (temperature, dew_point, etc.) stored as String type
+  - Added schema normalization to cast string columns to Float64 before processing
+  - Fixes error: `'mean' operation not supported for dtype 'str'`
+  - Affected stations include MXM00076856 (2009 data has string-typed temperature)
+
+- **Fixed quality code type mismatch in is_in() operations**
+  - Quality codes can be Int32 or String depending on file format
+  - Added `_get_valid_quality_codes()` and `_get_invalid_quality_codes()` helpers
+  - Automatically selects appropriate comparison values based on column dtype
+  - Fixes error: `'is_in' cannot check for List(String) values in Int32 data`
+
+### Internal Changes
+
+- Added `_normalize_schema()` in `ghcnh_loader.py` - normalizes DataFrame schema before concatenation
+- Added `_normalize_quality_column()` in `stats.py` - extracts Int32 from Struct quality columns
+- Split `VALID_QUALITY_CODES` into `VALID_QUALITY_CODES_INT` and `VALID_QUALITY_CODES_STR`
+- Split `INVALID_QUALITY_CODES` into `INVALID_QUALITY_CODES_INT` and `INVALID_QUALITY_CODES_STR`
+
+---
+
+## [0.2.2] - 2026-01-18 - Hourly Record Filtering and Incremental Updates
+
+### New Features
+
+- **Hourly record type filtering in metadata computation**
+  - Metadata now filters to only hourly instrument type records by default
+  - Excludes FM-12 SYNOP (3-hourly summaries) and other aggregate record types
+  - Includes FM-15 METAR, FM-16 SPECI, SAO, AUTO, and other hourly sources
+  - Added `HOURLY_REPORT_TYPES` and `SUMMARY_REPORT_TYPES` constants to `ghcnh_loader.py`
+  - Added `filter_hourly_records()`, `count_report_types()`, `is_hourly_report_type()` functions
+
+- **Report type counts in metadata**
+  - Metadata now includes `report_type_counts` field with count of each report type per station
+  - Includes `total_records_all_types` and `records_excluded_by_filter` for transparency
+  - Report type counts are stored as JSON in parquet/CSV output
+
+- **Incremental metadata updates**
+  - New `--incremental` flag for `compute_metadata.py`
+  - Only recomputes metadata for stations whose parquet files have been modified
+  - Compares file modification time against `metadata_computed_at` timestamp
+  - Merges updated stations with existing unchanged metadata
+  - Significantly faster when only a few stations have new data
+  - Usage: `uv run python src/scripts/compute_metadata.py compute --incremental`
+
+- **New functions in `metadata.py`**
+  - `get_station_file_mtime()` - Get latest file modification time for a station
+  - `get_stations_needing_update()` - Identify stations requiring metadata recomputation
+  - `compute_all_metadata_incremental()` - Compute metadata with incremental updates
+
+---
+
 ## [0.2.1] - 2026-01-18 - Metadata Fixes and Station Inventory Integration
 
 ### Bug Fixes
@@ -21,6 +84,11 @@
 - **Fixed station list CSV parsing**
   - Added schema overrides for WMO_ID, ICAO, and other mixed-type columns
   - Handles Windows line ending artifacts in column names
+
+- **Fixed schema mismatch when concatenating multi-year station data**
+  - GHCNh parquet files changed schema in 2025 (added Year, Month, Day, Hour, Minute columns)
+  - Changed `pl.concat` from `vertical_relaxed` to `diagonal_relaxed` to handle different column sets
+  - Added unified date handling: combines DATE column (older files) with Year/Month/Day/Hour/Minute (newer files)
 
 ### New Features
 
