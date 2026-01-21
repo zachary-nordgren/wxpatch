@@ -78,7 +78,7 @@ def compute(
         help="Export metadata to CSV",
     ),
     workers: int = typer.Option(
-        10,
+        6,
         "--workers", "-w",
         help="Number of parallel workers for station processing (default: 4, use 1 for sequential)",
         min=1,
