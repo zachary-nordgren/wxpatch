@@ -15,7 +15,9 @@ PROCESSED_DIR = DATA_DIR / "processed"
 METADATA_PARQUET = PROCESSED_DIR / "metadata.parquet"
 METADATA_CLEANED_PARQUET = PROCESSED_DIR / "metadata_cleaned.parquet"
 METADATA_CSV = PROCESSED_DIR / "metadata.csv"
+METADATA_CLEANED_CSV = PROCESSED_DIR / "metadata_cleaned.csv"
 CLEANING_REPORT_JSON = PROCESSED_DIR / "cleaning_report.json"
+CLEANING_LOG_TXT = PROCESSED_DIR / "clean_log.txt"
 
 # Station list from NOAA
 STATION_LIST_PATH = GHCNH_RAW_DIR / "ghcnh-station-list.csv"

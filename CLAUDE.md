@@ -112,14 +112,36 @@ Each parquet file contains hourly observations with 234 columns:
   - visibility, wind_gust, precipitation, etc.
   - Each variable has: value, Quality_Code, Measurement_Code, Report_Type_Code, Source_Code, units
 
-### Metadata Schema
+### Metadata Schema (v2.0)
 
-Computed metadata includes:
-- Station identifiers and location
-- Temporal coverage (first/last observation, years available)
-- Per-variable completeness percentages (filtered by quality codes)
-- Temperature, dew point, pressure statistics
-- Gap analysis (24h gaps, max gap duration, avg interval)
+Computed metadata columns are ordered by group:
+
+**Station Identifiers:**
+- `station_id`, `country_code`, `station_name`
+- `latitude`, `longitude`, `elevation`
+- `state`, `wmo_id`, `icao_code` (from NOAA station inventory)
+
+**Data Source Info:**
+- `report_type_counts` (JSON): Count of each report type
+- `total_records_all_types`, `records_excluded_by_filter`
+
+**Temporal Coverage:**
+- `first_observation`, `last_observation`
+- `years_available` (JSON list), `total_observation_count`, `year_counts` (JSON dict)
+
+**Completeness:**
+- Per-variable completeness percentages: `temperature_completeness_pct`, `dew_point_temperature_completeness_pct`, etc.
+
+**Statistics (JSON dicts):**
+- `temperature_stats`: `{"min": ..., "max": ..., "mean": ..., "std": ...}`
+- `dew_point_stats`: `{"mean": ..., "std": ...}`
+- `sea_level_pressure_stats`: `{"min": ..., "max": ..., "mean": ..., "std": ...}`
+
+**Gap Analysis:**
+- `gap_count_24h`, `max_gap_duration_hours`, `avg_observation_interval_hours`
+
+**Metadata:**
+- `metadata_computed_at`, `metadata_schema_version`
 
 ## Development Guidelines
 

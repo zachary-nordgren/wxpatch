@@ -1,5 +1,114 @@
 # Changelog
 
+## [0.2.6] - 2026-01-20 - Parallel Metadata Computation
+
+### New Features
+
+- **Multi-threaded station processing** for `compute_metadata.py`
+  - New `--workers` / `-w` option to control parallel processing (default: 4)
+  - Uses `ThreadPoolExecutor` to process multiple stations simultaneously
+  - Expected 3-4x speedup for full metadata computation (~4 hours → ~1-1.5 hours)
+  - Use `--workers 1` for sequential processing (previous behavior)
+
+### Usage
+
+```bash
+# Use 4 workers (default)
+uv run python src/scripts/compute_metadata.py compute
+
+# Use 8 workers for faster processing
+uv run python src/scripts/compute_metadata.py compute --workers 8
+
+# Sequential processing (previous behavior)
+uv run python src/scripts/compute_metadata.py compute --workers 1
+```
+
+---
+
+## [0.2.5] - 2026-01-20 - Metadata Schema Refactoring
+
+### Breaking Changes
+
+- **Metadata schema v2.0** - Existing metadata files must be recomputed
+  - Run: `uv run python src/scripts/compute_metadata.py compute --force`
+
+### Schema Changes
+
+- **Column reordering**: Station identifiers now grouped at beginning
+  - New order: station_id, country_code, station_name, latitude, longitude, elevation, state, wmo_id, icao_code, ...
+  - Previously: station_id, country_code, report_type_counts, ..., (enrichment columns at end)
+
+- **Statistics columns consolidated into JSON dicts**:
+  - `temperature_mean`, `temperature_std`, `temperature_min`, `temperature_max` → `temperature_stats`
+  - `dew_point_mean`, `dew_point_std` → `dew_point_stats`
+  - `sea_level_pressure_mean`, `sea_level_pressure_std`, `sea_level_pressure_min`, `sea_level_pressure_max` → `sea_level_pressure_stats`
+
+- **New columns**:
+  - `metadata_schema_version`: Version string for schema compatibility checking
+
+### New Features
+
+- **Keep stations without hourly records in metadata**: Stations that only have aggregate/SYNOP data are now included in metadata with `total_observation_count=0`. This preserves station info and `report_type_counts` for potential future use.
+
+- **Summary of non-hourly stations**: Metadata computation now reports how many stations have hourly data vs. only aggregate data in the final summary.
+
+### Bug Fixes
+
+- **Fixed ICAO code newline characters**: Strip whitespace from all string columns when loading NOAA station inventory (fixes Windows line ending issues in last column)
+
+- **Cleaner progress display**: Removed per-station warnings during metadata computation (no more interleaved warning messages with progress bar).
+
+### Removed Columns
+
+- `temperature_mean`, `temperature_std`, `temperature_min`, `temperature_max` (replaced by `temperature_stats`)
+- `dew_point_mean`, `dew_point_std` (replaced by `dew_point_stats`)
+- `sea_level_pressure_mean`, `sea_level_pressure_std`, `sea_level_pressure_min`, `sea_level_pressure_max` (replaced by `sea_level_pressure_stats`)
+
+---
+
+## [0.2.4] - 2026-01-20 - Cleaning Log and Station Exploration Notebook
+
+### New Features
+
+- **Added `--csv` option to `clean_metadata.py`**
+  - Export cleaned metadata to a custom CSV path
+  - Default: `data/processed/metadata_cleaned.csv` (separate from raw metadata CSV)
+  - Usage: `uv run python src/scripts/clean_metadata.py clean --csv path/to/output.csv`
+
+- **Added `--log` option to `clean_metadata.py`**
+  - Generates detailed human-readable log of all cleaning operations
+  - Logs each duplicate found/merged, invalid coordinate, and name change
+  - Default: `data/processed/clean_log.txt`
+  - Usage: `uv run python src/scripts/clean_metadata.py clean --log path/to/log.txt`
+
+- **Added `CleaningLog` class in `cleaning.py`**
+  - Tracks detailed cleaning operations with timestamps
+  - Sections for: duplicate detection, coordinate validation, name cleaning
+  - Summary section with final counts
+
+- **Created `01_station_exploration.py` marimo notebook**
+  - Interactive station exploration for filtering and clustering
+  - Loads metadata from computed parquet files
+  - Interactive sliders for filtering: temperature completeness, min years, min observations
+  - Histograms of completeness and observation distributions (plotly)
+  - Geographic map with station markers (folium)
+  - K-Means clustering with configurable features and cluster count
+  - Cluster visualization on geographic map
+  - Export filtered stations to CSV
+  - Run with: `uv run marimo edit notebooks/01_station_exploration.py`
+
+- **Added `notebooks` optional dependency group**
+  - marimo, plotly, folium, scikit-learn, pandas
+  - Install with: `uv sync --extra notebooks`
+
+### Internal Changes
+
+- Added `METADATA_CLEANED_CSV` and `CLEANING_LOG_TXT` path constants
+- Modified `save_metadata()` to accept optional `csv_path` parameter
+- Updated cleaning functions to accept optional `CleaningLog` parameter
+
+---
+
 ## [0.2.3] - 2026-01-18 - Schema Inconsistency Fixes
 
 ### Bug Fixes

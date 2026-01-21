@@ -9,6 +9,7 @@ Usage:
     python compute_metadata.py --force                  # Recompute even if exists
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -76,6 +77,13 @@ def compute(
         "--csv/--no-csv",
         help="Export metadata to CSV",
     ),
+    workers: int = typer.Option(
+        10,
+        "--workers", "-w",
+        help="Number of parallel workers for station processing (default: 4, use 1 for sequential)",
+        min=1,
+        max=32,
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Quiet output"),
 ) -> None:
@@ -114,6 +122,7 @@ def compute(
                 year_filter=year_filter,
                 station_filter=station_filter,
                 progress_callback=progress_callback,
+                max_workers=workers,
             )
 
         if len(metadata_df) == 0:
@@ -132,11 +141,14 @@ def compute(
         save_metadata(metadata_df, cleaned=False, export_csv=export_csv)
 
         # Print summary
+        no_hourly_count = (metadata_df["total_observation_count"] == 0).sum()
         print_success(f"Updated metadata for {updated_count} stations ({unchanged_count} unchanged)")
         print_summary_table("Metadata Summary", {
             "Stations updated": updated_count,
             "Stations unchanged": unchanged_count,
             "Total stations": len(metadata_df),
+            "Stations with hourly data": len(metadata_df) - no_hourly_count,
+            "Stations without hourly data": no_hourly_count,
             "Output file": str(METADATA_PARQUET),
             "CSV export": str(export_csv),
         })
@@ -154,6 +166,7 @@ def compute(
                 year_filter=year_filter,
                 station_filter=station_filter,
                 progress_callback=progress_callback,
+                max_workers=workers,
             )
 
         if len(metadata_df) == 0:
@@ -168,9 +181,12 @@ def compute(
         save_metadata(metadata_df, cleaned=False, export_csv=export_csv)
 
         # Print summary
+        no_hourly_count = (metadata_df["total_observation_count"] == 0).sum()
         print_success(f"Computed metadata for {len(metadata_df)} stations")
         print_summary_table("Metadata Summary", {
             "Total stations": len(metadata_df),
+            "Stations with hourly data": len(metadata_df) - no_hourly_count,
+            "Stations without hourly data": no_hourly_count,
             "Output file": str(METADATA_PARQUET),
             "CSV export": str(export_csv),
         })
@@ -200,6 +216,12 @@ def show(
 
     for row in metadata.head(limit).iter_rows(named=True):
         years = row.get("years_available", [])
+        # Parse JSON string if needed
+        if isinstance(years, str):
+            try:
+                years = json.loads(years)
+            except (json.JSONDecodeError, TypeError):
+                years = []
         year_count = len(years) if isinstance(years, list) else 0
 
         table.add_row(

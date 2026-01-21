@@ -19,8 +19,9 @@ from rich.table import Table
 from weather_imputation.config.paths import (
     METADATA_PARQUET,
     METADATA_CLEANED_PARQUET,
-    METADATA_CSV,
+    METADATA_CLEANED_CSV,
     CLEANING_REPORT_JSON,
+    CLEANING_LOG_TXT,
 )
 from weather_imputation.data.metadata import load_metadata, save_metadata
 from weather_imputation.data.cleaning import (
@@ -31,6 +32,7 @@ from weather_imputation.data.cleaning import (
     clean_station_names,
     run_cleaning_pipeline,
     CleaningReport,
+    CleaningLog,
 )
 from weather_imputation.utils.progress import (
     print_success,
@@ -67,6 +69,21 @@ def clean(
         "--output", "-o",
         help="Output cleaned metadata parquet file",
     ),
+    export_csv: bool = typer.Option(
+        True,
+        "--csv/--no-csv",
+        help="Export cleaned metadata to CSV",
+    ),
+    csv_output: Optional[Path] = typer.Option(
+        None,
+        "--csv-path",
+        help="Custom CSV output path (default: metadata_cleaned.csv)",
+    ),
+    log_output: Optional[Path] = typer.Option(
+        None,
+        "--log",
+        help="Path for detailed cleaning log (default: clean_log.txt)",
+    ),
     merge_duplicates: bool = typer.Option(
         True,
         "--merge-duplicates/--no-merge-duplicates",
@@ -75,7 +92,7 @@ def clean(
     merge_strategy: str = typer.Option(
         "prefer_longer",
         "--strategy",
-        help="Merge strategy: prefer_longer, prefer_recent, combine",
+        help="Merge strategy: prefer_longer (more observations) or prefer_recent (latest data)",
     ),
     fill_coordinates: bool = typer.Option(
         True,
@@ -105,6 +122,8 @@ def clean(
     # Determine input/output paths
     input_path = input_file or METADATA_PARQUET
     output_path = output_file or METADATA_CLEANED_PARQUET
+    csv_path = csv_output if csv_output else METADATA_CLEANED_CSV
+    log_path = log_output or CLEANING_LOG_TXT
 
     # Load metadata
     if not input_path.exists():
@@ -121,6 +140,9 @@ def clean(
 
     print_info(f"Loaded {len(metadata)} stations")
 
+    # Create cleaning log
+    cleaning_log = CleaningLog()
+
     # Run cleaning pipeline
     console.print("\n[bold]Running cleaning pipeline...[/bold]")
 
@@ -128,9 +150,11 @@ def clean(
         cleaned, report = run_cleaning_pipeline(
             metadata,
             merge_duplicates=merge_duplicates,
+            merge_strategy=merge_strategy,
             fill_coordinates=fill_coordinates,
             validate_coords=validate_coords,
             clean_names=clean_names,
+            log=cleaning_log,
         )
 
     # Show report
@@ -149,12 +173,18 @@ def clean(
     if dry_run:
         print_warning("\n[DRY RUN] No changes saved.")
         print_info(f"Would save to: {output_path}")
+        if export_csv:
+            print_info(f"Would export CSV to: {csv_path}")
+        print_info(f"Would save log to: {log_path}")
     else:
         # Save cleaned metadata
-        save_metadata(cleaned, cleaned=True, export_csv=True)
+        save_metadata(cleaned, cleaned=True, export_csv=export_csv, csv_path=csv_path)
         report.save()
+        cleaning_log.save(log_path)
         print_success(f"\nSaved cleaned metadata to {output_path}")
-        print_success(f"Exported CSV to {METADATA_CSV}")
+        if export_csv:
+            print_success(f"Exported CSV to {csv_path}")
+        print_success(f"Saved cleaning log to {log_path}")
         print_success(f"Saved report to {CLEANING_REPORT_JSON}")
 
 
