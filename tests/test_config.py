@@ -772,3 +772,356 @@ def test_model_config_yaml_roundtrip():
         assert loaded.d_model == original.d_model
         assert loaded.mit_weight == original.mit_weight
         assert loaded.ort_weight == original.ort_weight
+
+
+# ============================================================================
+# Training Configuration Tests
+# ============================================================================
+
+
+def test_optimizer_config():
+    """Test OptimizerConfig with default values."""
+    from weather_imputation.config.training import OptimizerConfig
+
+    config = OptimizerConfig()
+
+    assert config.optimizer_type == "adamw"
+    assert config.learning_rate == 1e-3
+    assert config.weight_decay == 1e-4
+    assert config.betas == (0.9, 0.999)
+    assert config.momentum == 0.9
+    assert config.grad_clip_norm == 1.0
+    assert config.grad_clip_value is None
+
+
+def test_optimizer_config_custom():
+    """Test OptimizerConfig with custom values."""
+    from weather_imputation.config.training import OptimizerConfig
+
+    config = OptimizerConfig(
+        optimizer_type="adam",
+        learning_rate=5e-4,
+        weight_decay=1e-5,
+        betas=(0.95, 0.999),
+        grad_clip_norm=5.0,
+        grad_clip_value=1.0,
+    )
+
+    assert config.optimizer_type == "adam"
+    assert config.learning_rate == 5e-4
+    assert config.weight_decay == 1e-5
+    assert config.betas == (0.95, 0.999)
+    assert config.grad_clip_norm == 5.0
+    assert config.grad_clip_value == 1.0
+
+
+def test_optimizer_config_validation():
+    """Test OptimizerConfig validation."""
+    from weather_imputation.config.training import OptimizerConfig
+
+    # Invalid learning rate (negative)
+    with pytest.raises(ValidationError):
+        OptimizerConfig(learning_rate=-0.001)
+
+    # Invalid learning rate (> 1.0)
+    with pytest.raises(ValidationError):
+        OptimizerConfig(learning_rate=1.5)
+
+    # Invalid betas (>= 1.0)
+    with pytest.raises(ValidationError) as exc_info:
+        OptimizerConfig(betas=(0.9, 1.0))
+    assert "Beta coefficients" in str(exc_info.value)
+
+    # Invalid betas (negative)
+    with pytest.raises(ValidationError) as exc_info:
+        OptimizerConfig(betas=(-0.1, 0.999))
+    assert "Beta coefficients" in str(exc_info.value)
+
+
+def test_scheduler_config():
+    """Test SchedulerConfig with default values."""
+    from weather_imputation.config.training import SchedulerConfig
+
+    config = SchedulerConfig()
+
+    assert config.scheduler_type == "cosine"
+    assert config.warmup_epochs == 5
+    assert config.patience == 5
+    assert config.factor == 0.5
+    assert config.step_size == 10
+    assert config.gamma == 0.1
+    assert config.min_lr == 1e-6
+
+
+def test_scheduler_config_custom():
+    """Test SchedulerConfig with custom values."""
+    from weather_imputation.config.training import SchedulerConfig
+
+    config = SchedulerConfig(
+        scheduler_type="plateau",
+        warmup_epochs=10,
+        patience=10,
+        factor=0.1,
+        min_lr=1e-7,
+    )
+
+    assert config.scheduler_type == "plateau"
+    assert config.warmup_epochs == 10
+    assert config.patience == 10
+    assert config.factor == 0.1
+    assert config.min_lr == 1e-7
+
+
+def test_scheduler_config_validation():
+    """Test SchedulerConfig validation."""
+    from weather_imputation.config.training import SchedulerConfig
+
+    # Invalid factor (>= 1.0)
+    with pytest.raises(ValidationError):
+        SchedulerConfig(factor=1.0)
+
+    # Invalid gamma (> 1.0)
+    with pytest.raises(ValidationError):
+        SchedulerConfig(gamma=1.5)
+
+    # Invalid patience (< 1)
+    with pytest.raises(ValidationError):
+        SchedulerConfig(patience=0)
+
+
+def test_early_stopping_config():
+    """Test EarlyStoppingConfig with default values."""
+    from weather_imputation.config.training import EarlyStoppingConfig
+
+    config = EarlyStoppingConfig()
+
+    assert config.enabled is True
+    assert config.patience == 10
+    assert config.min_delta == 1e-4
+    assert config.monitor == "val_loss"
+    assert config.mode == "min"
+
+
+def test_early_stopping_config_custom():
+    """Test EarlyStoppingConfig with custom values."""
+    from weather_imputation.config.training import EarlyStoppingConfig
+
+    config = EarlyStoppingConfig(
+        enabled=False, patience=15, min_delta=1e-3, monitor="val_rmse", mode="min"
+    )
+
+    assert config.enabled is False
+    assert config.patience == 15
+    assert config.min_delta == 1e-3
+    assert config.monitor == "val_rmse"
+    assert config.mode == "min"
+
+
+def test_early_stopping_config_validation():
+    """Test EarlyStoppingConfig validation."""
+    from weather_imputation.config.training import EarlyStoppingConfig
+
+    # Invalid patience (< 1)
+    with pytest.raises(ValidationError):
+        EarlyStoppingConfig(patience=0)
+
+    # Invalid min_delta (negative)
+    with pytest.raises(ValidationError):
+        EarlyStoppingConfig(min_delta=-0.001)
+
+
+def test_checkpoint_config():
+    """Test CheckpointConfig with default values."""
+    from weather_imputation.config.training import CheckpointConfig
+
+    config = CheckpointConfig()
+
+    assert config.save_every_n_epochs == 1
+    assert config.save_every_n_minutes == 30
+    assert config.keep_last_n == 3
+    assert config.save_best is True
+    assert config.monitor == "val_loss"
+    assert config.mode == "min"
+
+
+def test_checkpoint_config_custom():
+    """Test CheckpointConfig with custom values."""
+    from weather_imputation.config.training import CheckpointConfig
+
+    config = CheckpointConfig(
+        save_every_n_epochs=5,
+        save_every_n_minutes=60,
+        keep_last_n=5,
+        save_best=True,
+        monitor="val_rmse",
+        mode="min",
+    )
+
+    assert config.save_every_n_epochs == 5
+    assert config.save_every_n_minutes == 60
+    assert config.keep_last_n == 5
+    assert config.save_best is True
+    assert config.monitor == "val_rmse"
+
+
+def test_checkpoint_config_validation():
+    """Test CheckpointConfig validation."""
+    from weather_imputation.config.training import CheckpointConfig
+
+    # Valid: at least one method enabled
+    config = CheckpointConfig(save_every_n_epochs=1)
+    assert config.save_every_n_epochs == 1
+
+    config = CheckpointConfig(save_every_n_epochs=0, save_every_n_minutes=30)
+    assert config.save_every_n_minutes == 30
+
+    config = CheckpointConfig(
+        save_every_n_epochs=0, save_every_n_minutes=0, save_best=True
+    )
+    assert config.save_best is True
+
+    # Invalid: all checkpoint methods disabled
+    with pytest.raises(ValidationError) as exc_info:
+        CheckpointConfig(save_every_n_epochs=0, save_every_n_minutes=0, save_best=False)
+    assert "at least one checkpoint method" in str(exc_info.value).lower()
+
+
+def test_training_config():
+    """Test TrainingConfig with default values."""
+    from weather_imputation.config.training import TrainingConfig
+
+    config = TrainingConfig()
+
+    assert config.batch_size == 32
+    assert config.max_epochs == 100
+    assert config.validation_frequency is None
+    assert config.seed == 42
+    assert config.device == "auto"
+    assert config.mixed_precision is True
+    assert config.compile_model is False
+    assert config.num_workers == 4
+
+    # Check nested configs are initialized
+    assert config.optimizer.optimizer_type == "adamw"
+    assert config.scheduler.scheduler_type == "cosine"
+    assert config.early_stopping.enabled is True
+    assert config.checkpoint.save_best is True
+
+
+def test_training_config_custom():
+    """Test TrainingConfig with custom values."""
+    from weather_imputation.config.training import (
+        CheckpointConfig,
+        EarlyStoppingConfig,
+        OptimizerConfig,
+        SchedulerConfig,
+        TrainingConfig,
+    )
+
+    config = TrainingConfig(
+        batch_size=64,
+        max_epochs=200,
+        validation_frequency=100,
+        seed=123,
+        device="cuda",
+        mixed_precision=False,
+        compile_model=True,
+        num_workers=8,
+        optimizer=OptimizerConfig(learning_rate=1e-4, optimizer_type="adam"),
+        scheduler=SchedulerConfig(scheduler_type="plateau", warmup_epochs=0),
+        early_stopping=EarlyStoppingConfig(enabled=False),
+        checkpoint=CheckpointConfig(save_every_n_epochs=5, keep_last_n=10),
+    )
+
+    assert config.batch_size == 64
+    assert config.max_epochs == 200
+    assert config.validation_frequency == 100
+    assert config.seed == 123
+    assert config.device == "cuda"
+    assert config.mixed_precision is False
+    assert config.compile_model is True
+    assert config.num_workers == 8
+
+    # Check nested configs
+    assert config.optimizer.learning_rate == 1e-4
+    assert config.optimizer.optimizer_type == "adam"
+    assert config.scheduler.scheduler_type == "plateau"
+    assert config.scheduler.warmup_epochs == 0
+    assert config.early_stopping.enabled is False
+    assert config.checkpoint.save_every_n_epochs == 5
+    assert config.checkpoint.keep_last_n == 10
+
+
+def test_training_config_validation():
+    """Test TrainingConfig validation."""
+    from weather_imputation.config.training import TrainingConfig
+
+    # Invalid batch size (< 1)
+    with pytest.raises(ValidationError):
+        TrainingConfig(batch_size=0)
+
+    # Invalid max_epochs (< 1)
+    with pytest.raises(ValidationError):
+        TrainingConfig(max_epochs=0)
+
+    # Invalid num_workers (negative)
+    with pytest.raises(ValidationError):
+        TrainingConfig(num_workers=-1)
+
+
+def test_training_config_yaml_roundtrip():
+    """Test TrainingConfig YAML serialization and deserialization."""
+    from weather_imputation.config.training import (
+        OptimizerConfig,
+        SchedulerConfig,
+        TrainingConfig,
+    )
+
+    original = TrainingConfig(
+        batch_size=64,
+        max_epochs=50,
+        seed=999,
+        optimizer=OptimizerConfig(learning_rate=5e-4, weight_decay=1e-5),
+        scheduler=SchedulerConfig(scheduler_type="step", step_size=20),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "training_config.yaml"
+
+        # Save to YAML file
+        original.to_yaml_file(filepath)
+        assert filepath.exists()
+
+        # Load from YAML file
+        loaded = TrainingConfig.from_yaml_file(filepath)
+
+        # Verify all custom fields match
+        assert loaded.batch_size == original.batch_size
+        assert loaded.max_epochs == original.max_epochs
+        assert loaded.seed == original.seed
+        assert loaded.optimizer.learning_rate == original.optimizer.learning_rate
+        assert loaded.optimizer.weight_decay == original.optimizer.weight_decay
+        assert loaded.scheduler.scheduler_type == original.scheduler.scheduler_type
+        assert loaded.scheduler.step_size == original.scheduler.step_size
+
+
+def test_training_config_nested_serialization():
+    """Test TrainingConfig nested configuration serialization."""
+    from weather_imputation.config.training import TrainingConfig
+
+    config = TrainingConfig(batch_size=128, max_epochs=75)
+
+    # Convert to dict
+    config_dict = config.model_dump()
+    assert config_dict["batch_size"] == 128
+    assert config_dict["max_epochs"] == 75
+    assert "optimizer" in config_dict
+    assert "scheduler" in config_dict
+    assert "early_stopping" in config_dict
+    assert "checkpoint" in config_dict
+
+    # Verify nested configs are dicts
+    assert isinstance(config_dict["optimizer"], dict)
+    assert config_dict["optimizer"]["optimizer_type"] == "adamw"
+    assert isinstance(config_dict["scheduler"], dict)
+    assert config_dict["scheduler"]["scheduler_type"] == "cosine"

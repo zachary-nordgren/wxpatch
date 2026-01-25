@@ -130,3 +130,60 @@ This log tracks implementation progress, decisions, and findings during developm
   - Fixed to use d_model=101 (101 % 4 == 1, not divisible)
 
 **Confidence:** KNOWN - Directly implements SPEC.md section 3.4 model configurations, matches paper specifications for SAITS/CSDI hyperparameters.
+
+---
+
+### TASK-004: Training Configuration Classes
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/config/training.py` with 5 configuration classes:
+  - `OptimizerConfig`: Optimizer settings (type, learning_rate, weight_decay, betas, momentum, gradient clipping)
+  - `SchedulerConfig`: Learning rate scheduler (cosine/plateau/step/onecycle, warmup, patience, decay factors)
+  - `EarlyStoppingConfig`: Early stopping logic (enabled, patience, min_delta, monitor metric, mode)
+  - `CheckpointConfig`: Model checkpointing (save frequency by epochs/minutes, keep_last_n, save_best)
+  - `TrainingConfig`: Main configuration aggregating all sub-configs + batch_size, max_epochs, device, mixed_precision, compile_model
+- Added 17 comprehensive tests to `tests/test_config.py` (all passing, now 62 tests total)
+- Updated `src/weather_imputation/config/__init__.py` to export new classes
+
+**Key Design Decisions:**
+- Default optimizer: AdamW with lr=1e-3, weight_decay=1e-4 (proven effective for transformers)
+- Default scheduler: Cosine annealing with 5-epoch warmup (smooth convergence)
+- Default gradient clipping: norm=1.0 (prevents instability, especially for CSDI diffusion)
+- Default checkpointing: every 1 epoch + every 30 minutes (NFR-009: spot preemption resilience)
+- Keep last 3 checkpoints by default (balance storage vs safety)
+- Mixed precision enabled by default (NFR-004: faster training on modern GPUs)
+- torch.compile disabled by default (stability concerns, can enable for production)
+- Validation enforces at least one checkpoint method enabled (prevent data loss)
+- Cross-field validation for beta coefficients (must be in [0, 1))
+
+**Implementation Notes:**
+- Used modern Python 3.10+ type annotations: `float | None` instead of `Optional[float]`
+- CheckpointConfig has `@model_validator(mode="after")` to ensure at least one checkpoint method is enabled
+- OptimizerConfig has `@field_validator` for beta validation (both values must be in [0, 1))
+- Supports 5 scheduler types: cosine (default), plateau, step, onecycle, none
+- Supports 3 optimizer types: adamw (default), adam, sgd
+- Monitor metrics for early stopping/checkpointing: val_loss, val_rmse, val_mae, val_r2
+
+**Test Coverage:**
+- Default values for all 5 config classes
+- Custom values and overrides
+- Validation errors (invalid ranges, cross-field constraints)
+- YAML roundtrip serialization
+- Nested configuration serialization (TrainingConfig contains 4 sub-configs)
+- Edge cases (all checkpoint methods disabled, invalid beta coefficients)
+
+**Files Modified:**
+- `src/weather_imputation/config/training.py` (created, 219 lines)
+- `src/weather_imputation/config/__init__.py` (added training config exports)
+- `tests/test_config.py` (added 17 tests, now 62 tests total)
+- `TODO.md` (marked TASK-004 as DONE)
+
+**Lessons Learned:**
+- Pydantic Field validators with `gt=0.0` (greater than) allow exactly 0.0, must use `ge=0.0` (greater or equal) or `gt=0.0` depending on intent
+- For checkpoint frequency, better to validate at least one method enabled rather than setting defaults that could all be zero
+- Modern type hints (`X | None`) are preferred over `Optional[X]` for Python 3.10+
+- Ruff auto-fix handles UP045 (modernize type hints) cleanly
+
+**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 training configuration and NFR-004, NFR-006, NFR-009 requirements. Follows best practices from PyTorch training literature (gradient clipping, mixed precision, warmup).

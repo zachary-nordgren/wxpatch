@@ -49,10 +49,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created 6 model configuration classes: ModelConfig (base), LinearInterpolationConfig, SplineInterpolationConfig, MICEConfig, SAITSConfig, CSDIConfig. Added 14 comprehensive tests, all passing. Implemented cross-field validation for d_model/n_heads divisibility and beta_start/beta_end ordering.
 
 #### TASK-004: Create training configuration classes
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_config.py::test_training_config -v` passes
 - **Context:** `src/weather_imputation/config/training.py`, `tests/test_config.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created 5 configuration classes: OptimizerConfig, SchedulerConfig, EarlyStoppingConfig, CheckpointConfig, and TrainingConfig. Added 17 comprehensive tests, all passing. Implements NFR-004, NFR-006, NFR-009 requirements from SPEC.md.
 
 #### TASK-005: Create evaluation configuration classes
 - **Status:** TODO

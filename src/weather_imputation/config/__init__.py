@@ -22,6 +22,13 @@ from weather_imputation.config.paths import (
     PROCESSED_DIR,
     get_station_year_path,
 )
+from weather_imputation.config.training import (
+    CheckpointConfig,
+    EarlyStoppingConfig,
+    OptimizerConfig,
+    SchedulerConfig,
+    TrainingConfig,
+)
 
 __all__ = [
     "BaseConfig",
@@ -37,6 +44,11 @@ __all__ = [
     "MICEConfig",
     "SAITSConfig",
     "CSDIConfig",
+    "TrainingConfig",
+    "OptimizerConfig",
+    "SchedulerConfig",
+    "EarlyStoppingConfig",
+    "CheckpointConfig",
     "DATA_DIR",
     "GHCNH_RAW_DIR",
     "PROCESSED_DIR",
