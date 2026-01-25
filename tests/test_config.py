@@ -1,14 +1,19 @@
 """Tests for configuration classes."""
 
-import json
 import tempfile
 from pathlib import Path
 
 import pytest
-import yaml
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 
 from weather_imputation.config.base import BaseConfig, ExperimentConfig
+from weather_imputation.config.data import (
+    DataConfig,
+    MaskingConfig,
+    NormalizationConfig,
+    SplitConfig,
+    StationFilterConfig,
+)
 
 
 class SampleConfig(BaseConfig):
@@ -211,3 +216,302 @@ def test_nested_config():
     loaded = NestedConfig.from_yaml(yaml_str)
     assert loaded.inner.name == "inner_test"
     assert loaded.inner.value == 10
+
+
+# ================================
+# Data Configuration Tests
+# ================================
+
+
+def test_station_filter_config():
+    """Test StationFilterConfig with default values."""
+    config = StationFilterConfig()
+
+    # Check default completeness thresholds
+    assert config.min_temperature_completeness == 60.0
+    assert config.min_dew_point_completeness == 60.0
+    assert config.min_sea_level_pressure_completeness == 60.0
+    assert config.min_wind_speed_completeness == 60.0
+    assert config.min_wind_direction_completeness == 60.0
+    assert config.min_relative_humidity_completeness == 60.0
+
+    # Check default temporal thresholds
+    assert config.min_years_available == 3
+    assert config.min_total_observations == 1000
+
+    # Check default geographic bounds (North America)
+    assert config.latitude_range == (24.0, 50.0)
+    assert config.longitude_range == (-130.0, -60.0)
+
+    # Check gap pattern threshold
+    assert config.max_gap_duration_hours is None
+
+
+def test_station_filter_config_custom():
+    """Test StationFilterConfig with custom values."""
+    config = StationFilterConfig(
+        min_temperature_completeness=80.0,
+        min_years_available=5,
+        latitude_range=(30.0, 45.0),
+        longitude_range=(-120.0, -70.0),
+        max_gap_duration_hours=720.0,
+    )
+
+    assert config.min_temperature_completeness == 80.0
+    assert config.min_years_available == 5
+    assert config.latitude_range == (30.0, 45.0)
+    assert config.longitude_range == (-120.0, -70.0)
+    assert config.max_gap_duration_hours == 720.0
+
+
+def test_station_filter_config_validation():
+    """Test StationFilterConfig validation."""
+    # Invalid completeness (> 100)
+    with pytest.raises(ValidationError):
+        StationFilterConfig(min_temperature_completeness=150.0)
+
+    # Invalid completeness (< 0)
+    with pytest.raises(ValidationError):
+        StationFilterConfig(min_temperature_completeness=-10.0)
+
+    # Invalid years (< 1)
+    with pytest.raises(ValidationError):
+        StationFilterConfig(min_years_available=0)
+
+    # Invalid latitude range (min >= max)
+    with pytest.raises(ValidationError):
+        StationFilterConfig(latitude_range=(50.0, 24.0))
+
+    # Invalid longitude range (min >= max)
+    with pytest.raises(ValidationError):
+        StationFilterConfig(longitude_range=(-60.0, -130.0))
+
+
+def test_normalization_config():
+    """Test NormalizationConfig with default values."""
+    config = NormalizationConfig()
+
+    assert config.method == "zscore"
+    assert config.per_station is True
+    assert config.clip_outliers is False
+
+
+def test_normalization_config_custom():
+    """Test NormalizationConfig with custom values."""
+    config = NormalizationConfig(
+        method="minmax", per_station=False, clip_outliers=True
+    )
+
+    assert config.method == "minmax"
+    assert config.per_station is False
+    assert config.clip_outliers is True
+
+
+def test_normalization_config_validation():
+    """Test NormalizationConfig validation."""
+    # Invalid method
+    with pytest.raises(ValidationError):
+        NormalizationConfig(method="invalid_method")
+
+
+def test_masking_config():
+    """Test MaskingConfig with default values."""
+    config = MaskingConfig()
+
+    assert config.strategy == "realistic"
+    assert config.missing_ratio == 0.2
+    assert config.min_gap_length == 1
+    assert config.max_gap_length == 168
+
+
+def test_masking_config_custom():
+    """Test MaskingConfig with custom values."""
+    config = MaskingConfig(
+        strategy="mcar", missing_ratio=0.3, min_gap_length=6, max_gap_length=72
+    )
+
+    assert config.strategy == "mcar"
+    assert config.missing_ratio == 0.3
+    assert config.min_gap_length == 6
+    assert config.max_gap_length == 72
+
+
+def test_masking_config_validation():
+    """Test MaskingConfig validation."""
+    # Invalid strategy
+    with pytest.raises(ValidationError):
+        MaskingConfig(strategy="invalid_strategy")
+
+    # Invalid missing_ratio (> 1)
+    with pytest.raises(ValidationError):
+        MaskingConfig(missing_ratio=1.5)
+
+    # Invalid missing_ratio (< 0)
+    with pytest.raises(ValidationError):
+        MaskingConfig(missing_ratio=-0.1)
+
+    # Invalid gap length (max < min)
+    with pytest.raises(ValidationError):
+        MaskingConfig(min_gap_length=10, max_gap_length=5)
+
+
+def test_split_config():
+    """Test SplitConfig with default values."""
+    config = SplitConfig()
+
+    assert config.strategy == "simulated"
+    assert config.train_ratio == 0.7
+    assert config.val_ratio == 0.15
+    assert config.test_ratio == 0.15
+
+
+def test_split_config_custom():
+    """Test SplitConfig with custom values."""
+    config = SplitConfig(
+        strategy="temporal", train_ratio=0.6, val_ratio=0.2, test_ratio=0.2
+    )
+
+    assert config.strategy == "temporal"
+    assert config.train_ratio == 0.6
+    assert config.val_ratio == 0.2
+    assert config.test_ratio == 0.2
+
+
+def test_split_config_validation():
+    """Test SplitConfig validation."""
+    # Invalid strategy
+    with pytest.raises(ValidationError):
+        SplitConfig(strategy="invalid_strategy")
+
+    # Invalid ratio (> 1)
+    with pytest.raises(ValidationError):
+        SplitConfig(train_ratio=1.5)
+
+    # Invalid ratio (< 0)
+    with pytest.raises(ValidationError):
+        SplitConfig(val_ratio=-0.1)
+
+    # Ratios don't sum to 1.0
+    with pytest.raises(ValidationError):
+        SplitConfig(train_ratio=0.5, val_ratio=0.3, test_ratio=0.3)
+
+
+def test_data_config():
+    """Test DataConfig with default values."""
+    config = DataConfig()
+
+    # Check Tier 1 variables (6 core variables)
+    assert len(config.variables) == 6
+    assert "temperature" in config.variables
+    assert "dew_point_temperature" in config.variables
+    assert "sea_level_pressure" in config.variables
+    assert "wind_speed" in config.variables
+    assert "wind_direction" in config.variables
+    assert "relative_humidity" in config.variables
+
+    # Check sub-configurations
+    assert isinstance(config.station_filter, StationFilterConfig)
+    assert isinstance(config.normalization, NormalizationConfig)
+    assert isinstance(config.masking, MaskingConfig)
+    assert isinstance(config.split, SplitConfig)
+
+    # Check windowing parameters
+    assert config.window_size == 168
+    assert config.stride == 24
+
+    # Check quality control
+    assert config.report_types == ["AUTO", "FM-15"]
+
+
+def test_data_config_custom():
+    """Test DataConfig with custom values."""
+    config = DataConfig(
+        variables=["temperature", "dew_point_temperature"],
+        station_filter=StationFilterConfig(min_temperature_completeness=80.0),
+        normalization=NormalizationConfig(method="minmax"),
+        masking=MaskingConfig(strategy="mcar", missing_ratio=0.3),
+        split=SplitConfig(strategy="temporal"),
+        window_size=336,
+        stride=48,
+        report_types=["AUTO"],
+    )
+
+    assert len(config.variables) == 2
+    assert config.station_filter.min_temperature_completeness == 80.0
+    assert config.normalization.method == "minmax"
+    assert config.masking.strategy == "mcar"
+    assert config.split.strategy == "temporal"
+    assert config.window_size == 336
+    assert config.stride == 48
+    assert config.report_types == ["AUTO"]
+
+
+def test_data_config_validation():
+    """Test DataConfig validation."""
+    # Invalid variable (not in Tier 1)
+    with pytest.raises(ValidationError):
+        DataConfig(variables=["temperature", "invalid_variable"])
+
+    # Empty variables list
+    with pytest.raises(ValidationError):
+        DataConfig(variables=[])
+
+    # Invalid window_size (< 1)
+    with pytest.raises(ValidationError):
+        DataConfig(window_size=0)
+
+    # Invalid stride (< 1)
+    with pytest.raises(ValidationError):
+        DataConfig(stride=0)
+
+    # Empty report_types list
+    with pytest.raises(ValidationError):
+        DataConfig(report_types=[])
+
+
+def test_data_config_yaml_roundtrip():
+    """Test DataConfig serialization and deserialization."""
+    original = DataConfig(
+        variables=["temperature", "wind_speed"],
+        station_filter=StationFilterConfig(min_temperature_completeness=75.0),
+        window_size=240,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "data_config.yaml"
+
+        # Save to YAML file
+        original.to_yaml_file(filepath)
+        assert filepath.exists()
+
+        # Load from YAML file
+        loaded = DataConfig.from_yaml_file(filepath)
+
+        # Verify all fields match
+        assert loaded.variables == original.variables
+        assert (
+            loaded.station_filter.min_temperature_completeness
+            == original.station_filter.min_temperature_completeness
+        )
+        assert loaded.window_size == original.window_size
+
+
+def test_data_config_nested_serialization():
+    """Test that DataConfig correctly serializes nested configurations."""
+    config = DataConfig(
+        variables=["temperature", "dew_point_temperature"],
+        station_filter=StationFilterConfig(
+            min_temperature_completeness=70.0, min_years_available=5
+        ),
+        normalization=NormalizationConfig(method="minmax", per_station=False),
+    )
+
+    yaml_str = config.to_yaml()
+
+    # Check that nested configs are properly serialized
+    assert "station_filter:" in yaml_str
+    assert "min_temperature_completeness: 70.0" in yaml_str
+    assert "min_years_available: 5" in yaml_str
+    assert "normalization:" in yaml_str
+    assert "method: minmax" in yaml_str
+    assert "per_station: false" in yaml_str

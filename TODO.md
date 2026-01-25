@@ -37,10 +37,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created BaseConfig and ExperimentConfig classes with YAML/JSON serialization support. All 14 tests passing.
 
 #### TASK-002: Create data configuration classes
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_config.py::test_data_config -v` passes
 - **Context:** `src/weather_imputation/config/data.py`, `tests/test_config.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created StationFilterConfig, NormalizationConfig, MaskingConfig, SplitConfig, and DataConfig with comprehensive validation. All 17 tests passing.
 
 #### TASK-003: Create model configuration classes
 - **Status:** TODO

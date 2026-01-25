@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] - 2026-01-25 - Base Configuration Infrastructure
+## [0.3.0] - 2026-01-25 - Configuration Infrastructure
 
 ### New Features
 
@@ -11,12 +11,36 @@
   - Automatic parent directory creation when saving configs
   - Support for nested configuration structures
 
+- **Data Configuration Classes**
+  - **`StationFilterConfig`**: Quality thresholds for filtering stations
+    - Completeness thresholds for all 6 Tier 1 variables (temperature, dew point, pressure, wind speed/direction, humidity)
+    - Temporal coverage thresholds (min years, min observations)
+    - Geographic bounds (North America default: lat 24-50°, lon -130 to -60°)
+    - Gap pattern thresholds (max gap duration)
+  - **`NormalizationConfig`**: Variable normalization settings
+    - Methods: zscore (default), minmax, or none
+    - Per-station or global normalization
+    - Optional outlier clipping for zscore
+  - **`MaskingConfig`**: Synthetic gap generation strategies
+    - Strategies: MCAR, MAR, MNAR, realistic (default)
+    - Configurable missing ratio and gap length constraints
+  - **`SplitConfig`**: Train/validation/test splitting
+    - Strategies: spatial, temporal, hybrid, simulated (default: Strategy D)
+    - Configurable train/val/test ratios (default: 70/15/15)
+    - Automatic validation that ratios sum to 1.0
+  - **`DataConfig`**: Main data configuration
+    - Aggregates all sub-configurations
+    - Tier 1 variables hardcoded as defaults
+    - Time series windowing (default: 168 hours = 1 week)
+    - Report type filtering (default: AUTO, FM-15)
+
 - **Configuration Features:**
   - YAML and JSON file I/O (`to_yaml_file()`, `from_yaml_file()`, `to_json_file()`, `from_json_file()`)
   - Dictionary conversion (`to_dict()`, `from_dict()`)
   - Validation on assignment (catches errors at runtime)
   - Extra field protection (raises errors for unknown configuration keys)
   - Support for arbitrary types (Path, etc.)
+  - Comprehensive field validation (ranges, enums, constraints)
 
 ### Dependencies
 
@@ -25,14 +49,15 @@
 ### Files Added
 
 - `src/weather_imputation/config/base.py` - Base configuration classes
-- `tests/test_config.py` - Comprehensive test suite (14 tests)
+- `src/weather_imputation/config/data.py` - Data configuration classes (337 lines)
+- `tests/test_config.py` - Comprehensive test suite (31 tests, all passing)
 - `DEVLOG.md` - Development log for tracking implementation decisions
 
 ### Files Modified
 
 - `src/weather_imputation/config/__init__.py` - Export BaseConfig and ExperimentConfig
 - `pyproject.toml` - Added PyYAML dependency
-- `TODO.md` - Marked TASK-001 as completed
+- `TODO.md` - Marked TASK-001 and TASK-002 as completed
 
 ### Test Coverage
 
@@ -40,13 +65,23 @@
 # Run all configuration tests
 uv run pytest tests/test_config.py -v
 
-# All 14 tests passing:
-# - Basic instantiation and defaults
-# - Validation errors (missing fields, wrong types, extra fields)
-# - Dictionary/YAML/JSON serialization and deserialization
-# - File I/O roundtrips
-# - Parent directory creation
-# - Nested configuration support
+# All 31 tests passing:
+# Base configuration (14 tests):
+#   - Basic instantiation and defaults
+#   - Validation errors (missing fields, wrong types, extra fields)
+#   - Dictionary/YAML/JSON serialization and deserialization
+#   - File I/O roundtrips
+#   - Parent directory creation
+#   - Nested configuration support
+#
+# Data configuration (17 tests):
+#   - StationFilterConfig: defaults, custom values, validation
+#   - NormalizationConfig: defaults, custom values, validation
+#   - MaskingConfig: defaults, custom values, validation (gap length constraints)
+#   - SplitConfig: defaults, custom values, validation (ratio sum = 1.0)
+#   - DataConfig: defaults, custom values, validation (Tier 1 variables)
+#   - YAML roundtrip serialization
+#   - Nested configuration serialization
 ```
 
 ---
