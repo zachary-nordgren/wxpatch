@@ -250,3 +250,54 @@ This log tracks implementation progress, decisions, and findings during developm
 - Stratification dimensions should be opt-out (important for comprehensive evaluation)
 
 **Confidence:** KNOWN - Directly implements SPEC.md section 3.2 (evaluation component), FR-011 through FR-016. Defaults based on meteorological standards and statistical best practices.
+
+---
+
+### TASK-006: GHCNh Variable Extraction Utilities
+
+**Status:** Completed
+
+**Implementation:**
+- Added `extract_tier1_variables()` function to `src/weather_imputation/data/ghcnh_loader.py`:
+  - Extracts Tier 1 weather variables (6 core variables: temperature, dew_point_temperature, sea_level_pressure, wind_speed, wind_direction, relative_humidity)
+  - Extracts all 6 attributes for each variable: value, Quality_Code, Measurement_Code, Report_Type_Code, Source_Code, units
+  - Includes primary columns: STATION, Station_name, DATE, LATITUDE, LONGITUDE
+  - Handles missing columns gracefully (only includes columns that exist in DataFrame)
+  - Supports extracting all Tier 1 variables (default) or a custom subset
+- Created comprehensive test suite in `tests/test_ghcnh_loader.py` with 11 tests:
+  - Default extraction (all Tier 1 variables)
+  - Subset extraction (specific variables)
+  - Single variable extraction
+  - Missing columns handling
+  - Empty DataFrame handling
+  - No matching columns handling
+  - Data value preservation
+  - Row order preservation
+  - Null value handling
+  - Constants validation (TIER1_VARIABLES, VARIABLE_SUFFIXES)
+
+**Key Design Decisions:**
+- Function returns empty DataFrame if no columns match (rather than raising error)
+- Only selects columns that exist in input DataFrame (defensive programming)
+- Uses existing constants TIER1_VARIABLES and VARIABLE_SUFFIXES for consistency
+- Logs warning when no requested columns are found
+- Does not modify input DataFrame (pure function)
+
+**Test Coverage:**
+- All 11 tests passing
+- Covers happy path, edge cases, error cases
+- Validates data integrity (values, order, nulls preserved)
+- Validates constants match SPEC.md requirements
+
+**Files Modified:**
+- `src/weather_imputation/data/ghcnh_loader.py` (added extract_tier1_variables function, ~50 lines)
+- `tests/test_ghcnh_loader.py` (created, 259 lines with 11 tests)
+- `TODO.md` (marked TASK-006 as DONE)
+
+**Lessons Learned:**
+- Polars `.select()` naturally handles column subset selection
+- Building column list dynamically allows for missing columns without errors
+- Ruff's SIM300 (Yoda condition) prefers `expected == actual` over `actual == expected`
+- Pre-existing line length violations in file are not blockers for new code
+
+**Confidence:** KNOWN - Implements FR-004 from SPEC.md (6-variable imputation), leverages well-documented GHCNh schema with 6 attributes per variable. Tests validate all requirements.

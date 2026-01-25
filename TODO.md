@@ -63,10 +63,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 ### Data Pipeline
 
 #### TASK-006: Create GHCNh variable extraction utilities
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_ghcnh_loader.py::test_extract_tier1_variables -v` passes
 - **Context:** `src/weather_imputation/data/ghcnh_loader.py`, `tests/test_ghcnh_loader.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created `extract_tier1_variables()` function that extracts Tier 1 weather variables (6 core variables) with all their attributes (value, Quality_Code, Measurement_Code, Report_Type_Code, Source_Code, units). Added 11 comprehensive tests covering default extraction, subsets, missing columns, null values, and data preservation. All tests passing. Implementation leverages existing TIER1_VARIABLES and VARIABLE_SUFFIXES constants.
 
 #### TASK-007: Implement quality flag filtering
 - **Status:** TODO
