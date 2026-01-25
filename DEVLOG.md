@@ -82,3 +82,51 @@ This log tracks implementation progress, decisions, and findings during developm
 - `TODO.md` (marked TASK-002 as DONE)
 
 **Confidence:** KNOWN - Directly implements SPEC.md section 3.4 requirements, validates per FR-003 through FR-007.
+
+---
+
+### TASK-003: Model Configuration Classes
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/config/model.py` with 6 configuration classes:
+  - `ModelConfig`: Base configuration for all imputation models (model_type, n_variables)
+  - `LinearInterpolationConfig`: Linear interpolation baseline (max_gap_size)
+  - `SplineInterpolationConfig`: Akima spline interpolation (spline_order, max_gap_size)
+  - `MICEConfig`: Multiple Imputation by Chained Equations (n_iterations, n_imputations, predictor_method)
+  - `SAITSConfig`: Self-Attention Imputation for Time Series (n_layers, n_heads, d_model, d_ff, dropout, mit_weight, ort_weight, position encoding, wind encoding, metadata conditioning)
+  - `CSDIConfig`: Conditional Score-based Diffusion Imputation (n_diffusion_steps, noise_schedule, beta_start/end, denoising network architecture, sampling strategy, n_samples)
+- Added 14 comprehensive tests to `tests/test_config.py` (all passing, now 45 tests total)
+- Updated `src/weather_imputation/config/__init__.py` to export new classes
+
+**Key Design Decisions:**
+- Classical methods (linear, spline, MICE) have minimal hyperparameters (no-train or simple sklearn wrappers)
+- SAITS defaults match paper recommendations: 2 layers, 4 heads, d_model=128, d_ff=512
+- CSDI defaults: 50 diffusion steps (cost vs quality tradeoff), cosine noise schedule, DDPM sampling
+- Circular wind encoding enabled by default for SAITS (sin/cos components)
+- Station metadata conditioning disabled by default (can be enabled for experiments)
+- Cross-field validation using `@model_validator(mode="after")`:
+  - SAITS/CSDI: d_model must be divisible by n_heads (required for multi-head attention)
+  - CSDI: beta_end must be > beta_start (noise schedule monotonicity)
+
+**Test Coverage:**
+- Default values for all 6 model config classes
+- Custom values and overrides
+- Validation errors (invalid enums, out-of-range values, cross-field constraints)
+- YAML roundtrip serialization
+- Comprehensive coverage of SAITS and CSDI hyperparameters
+
+**Files Modified:**
+- `src/weather_imputation/config/model.py` (created, 325 lines)
+- `src/weather_imputation/config/__init__.py` (added model config exports)
+- `tests/test_config.py` (added 14 tests, now 45 tests total)
+- `TODO.md` (marked TASK-003 as DONE)
+
+**Lessons Learned:**
+- Pydantic v2 `@model_validator(mode="after")` is required for cross-field validation where both fields are set simultaneously in __init__
+- `@field_validator` with `info.data` doesn't work reliably for cross-field checks due to validation order
+- Test case with d_model=100, n_heads=4 was incorrectly passing because 100 % 4 == 0 (divisible!)
+  - Fixed to use d_model=101 (101 % 4 == 1, not divisible)
+
+**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 model configurations, matches paper specifications for SAITS/CSDI hyperparameters.

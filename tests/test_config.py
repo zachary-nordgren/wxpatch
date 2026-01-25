@@ -515,3 +515,260 @@ def test_data_config_nested_serialization():
     assert "normalization:" in yaml_str
     assert "method: minmax" in yaml_str
     assert "per_station: false" in yaml_str
+
+
+# ============================================================================
+# Model Configuration Tests
+# ============================================================================
+
+
+def test_linear_interpolation_config():
+    """Test LinearInterpolationConfig with default values."""
+    from weather_imputation.config.model import LinearInterpolationConfig
+
+    config = LinearInterpolationConfig()
+
+    assert config.model_type == "linear"
+    assert config.n_variables == 6
+    assert config.max_gap_size is None
+
+
+def test_linear_interpolation_config_custom():
+    """Test LinearInterpolationConfig with custom values."""
+    from weather_imputation.config.model import LinearInterpolationConfig
+
+    config = LinearInterpolationConfig(n_variables=4, max_gap_size=24)
+
+    assert config.model_type == "linear"
+    assert config.n_variables == 4
+    assert config.max_gap_size == 24
+
+
+def test_spline_interpolation_config():
+    """Test SplineInterpolationConfig with default values."""
+    from weather_imputation.config.model import SplineInterpolationConfig
+
+    config = SplineInterpolationConfig()
+
+    assert config.model_type == "spline"
+    assert config.n_variables == 6
+    assert config.spline_order == 3
+    assert config.max_gap_size is None
+
+
+def test_spline_interpolation_config_custom():
+    """Test SplineInterpolationConfig with custom values."""
+    from weather_imputation.config.model import SplineInterpolationConfig
+
+    config = SplineInterpolationConfig(spline_order=5, max_gap_size=48)
+
+    assert config.model_type == "spline"
+    assert config.spline_order == 5
+    assert config.max_gap_size == 48
+
+
+def test_spline_interpolation_config_validation():
+    """Test SplineInterpolationConfig validation."""
+    from weather_imputation.config.model import SplineInterpolationConfig
+
+    # Invalid spline order (< 1)
+    with pytest.raises(ValidationError):
+        SplineInterpolationConfig(spline_order=0)
+
+    # Invalid spline order (> 5)
+    with pytest.raises(ValidationError):
+        SplineInterpolationConfig(spline_order=6)
+
+
+def test_mice_config():
+    """Test MICEConfig with default values."""
+    from weather_imputation.config.model import MICEConfig
+
+    config = MICEConfig()
+
+    assert config.model_type == "mice"
+    assert config.n_variables == 6
+    assert config.n_iterations == 10
+    assert config.n_imputations == 5
+    assert config.predictor_method == "bayesian_ridge"
+
+
+def test_mice_config_custom():
+    """Test MICEConfig with custom values."""
+    from weather_imputation.config.model import MICEConfig
+
+    config = MICEConfig(
+        n_iterations=20, n_imputations=10, predictor_method="random_forest"
+    )
+
+    assert config.n_iterations == 20
+    assert config.n_imputations == 10
+    assert config.predictor_method == "random_forest"
+
+
+def test_saits_config():
+    """Test SAITSConfig with default values."""
+    from weather_imputation.config.model import SAITSConfig
+
+    config = SAITSConfig()
+
+    assert config.model_type == "saits"
+    assert config.n_variables == 6
+    assert config.n_layers == 2
+    assert config.n_heads == 4
+    assert config.d_model == 128
+    assert config.d_ff == 512
+    assert config.dropout == 0.1
+    assert config.mit_weight == 1.0
+    assert config.ort_weight == 1.0
+    assert config.use_learnable_position_encoding is True
+    assert config.max_seq_len == 512
+    assert config.circular_wind_encoding is True
+    assert config.use_station_metadata is False
+
+
+def test_saits_config_custom():
+    """Test SAITSConfig with custom values."""
+    from weather_imputation.config.model import SAITSConfig
+
+    config = SAITSConfig(
+        n_layers=4,
+        n_heads=8,
+        d_model=256,
+        d_ff=1024,
+        dropout=0.2,
+        mit_weight=1.5,
+        ort_weight=0.5,
+        use_station_metadata=True,
+    )
+
+    assert config.n_layers == 4
+    assert config.n_heads == 8
+    assert config.d_model == 256
+    assert config.d_ff == 1024
+    assert config.dropout == 0.2
+    assert config.mit_weight == 1.5
+    assert config.ort_weight == 0.5
+    assert config.use_station_metadata is True
+
+
+def test_saits_config_validation():
+    """Test SAITSConfig validation."""
+    from weather_imputation.config.model import SAITSConfig
+
+    # Valid: d_model divisible by n_heads
+    config = SAITSConfig(d_model=128, n_heads=4)
+    assert config.d_model == 128
+
+    # Invalid: d_model not divisible by n_heads (101 % 4 = 1, not divisible)
+    with pytest.raises(ValidationError) as exc_info:
+        SAITSConfig(d_model=101, n_heads=4)
+    assert "divisible by n_heads" in str(exc_info.value)
+
+
+def test_csdi_config():
+    """Test CSDIConfig with default values."""
+    from weather_imputation.config.model import CSDIConfig
+
+    config = CSDIConfig()
+
+    assert config.model_type == "csdi"
+    assert config.n_variables == 6
+    assert config.n_diffusion_steps == 50
+    assert config.noise_schedule == "cosine"
+    assert config.beta_start == 0.0001
+    assert config.beta_end == 0.02
+    assert config.n_layers == 4
+    assert config.n_heads == 4
+    assert config.d_model == 128
+    assert config.d_ff == 512
+    assert config.dropout == 0.1
+    assert config.n_samples == 10
+    assert config.sampling_strategy == "ddpm"
+    assert config.ddim_steps is None
+    assert config.use_time_embedding is True
+    assert config.use_station_metadata is False
+
+
+def test_csdi_config_custom():
+    """Test CSDIConfig with custom values."""
+    from weather_imputation.config.model import CSDIConfig
+
+    config = CSDIConfig(
+        n_diffusion_steps=100,
+        noise_schedule="linear",
+        beta_start=0.0005,
+        beta_end=0.05,
+        n_layers=6,
+        n_heads=8,
+        d_model=256,
+        n_samples=20,
+        sampling_strategy="ddim",
+        ddim_steps=25,
+        use_station_metadata=True,
+    )
+
+    assert config.n_diffusion_steps == 100
+    assert config.noise_schedule == "linear"
+    assert config.beta_start == 0.0005
+    assert config.beta_end == 0.05
+    assert config.n_layers == 6
+    assert config.n_heads == 8
+    assert config.d_model == 256
+    assert config.n_samples == 20
+    assert config.sampling_strategy == "ddim"
+    assert config.ddim_steps == 25
+    assert config.use_station_metadata is True
+
+
+def test_csdi_config_validation():
+    """Test CSDIConfig validation."""
+    from weather_imputation.config.model import CSDIConfig
+
+    # Valid: d_model divisible by n_heads
+    config = CSDIConfig(d_model=128, n_heads=4)
+    assert config.d_model == 128
+
+    # Invalid: d_model not divisible by n_heads (101 % 4 = 1, not divisible)
+    with pytest.raises(ValidationError) as exc_info:
+        CSDIConfig(d_model=101, n_heads=4)
+    assert "divisible by n_heads" in str(exc_info.value)
+
+    # Valid: beta_end > beta_start
+    config = CSDIConfig(beta_start=0.0001, beta_end=0.02)
+    assert config.beta_end > config.beta_start
+
+    # Invalid: beta_end <= beta_start
+    with pytest.raises(ValidationError) as exc_info:
+        CSDIConfig(beta_start=0.02, beta_end=0.01)
+    assert "greater than beta_start" in str(exc_info.value)
+
+
+def test_model_config_yaml_roundtrip():
+    """Test model configurations YAML serialization and deserialization."""
+    from weather_imputation.config.model import SAITSConfig
+
+    original = SAITSConfig(
+        n_layers=4,
+        n_heads=8,
+        d_model=256,
+        mit_weight=1.5,
+        ort_weight=0.5,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "saits_config.yaml"
+
+        # Save to YAML file
+        original.to_yaml_file(filepath)
+        assert filepath.exists()
+
+        # Load from YAML file
+        loaded = SAITSConfig.from_yaml_file(filepath)
+
+        # Verify all custom fields match
+        assert loaded.n_layers == original.n_layers
+        assert loaded.n_heads == original.n_heads
+        assert loaded.d_model == original.d_model
+        assert loaded.mit_weight == original.mit_weight
+        assert loaded.ort_weight == original.ort_weight

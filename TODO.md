@@ -43,10 +43,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created StationFilterConfig, NormalizationConfig, MaskingConfig, SplitConfig, and DataConfig with comprehensive validation. All 17 tests passing.
 
 #### TASK-003: Create model configuration classes
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_config.py::test_model_config -v` passes
 - **Context:** `src/weather_imputation/config/model.py`, `tests/test_config.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created 6 model configuration classes: ModelConfig (base), LinearInterpolationConfig, SplineInterpolationConfig, MICEConfig, SAITSConfig, CSDIConfig. Added 14 comprehensive tests, all passing. Implemented cross-field validation for d_model/n_heads divisibility and beta_start/beta_end ordering.
 
 #### TASK-004: Create training configuration classes
 - **Status:** TODO
