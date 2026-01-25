@@ -1125,3 +1125,324 @@ def test_training_config_nested_serialization():
     assert config_dict["optimizer"]["optimizer_type"] == "adamw"
     assert isinstance(config_dict["scheduler"], dict)
     assert config_dict["scheduler"]["scheduler_type"] == "cosine"
+
+
+# ============================================================================
+# Evaluation Configuration Tests
+# ============================================================================
+
+
+def test_metric_config():
+    """Test MetricConfig with default values."""
+    from weather_imputation.config.evaluation import MetricConfig
+
+    config = MetricConfig()
+
+    # Point metrics enabled by default
+    assert config.compute_rmse is True
+    assert config.compute_mae is True
+    assert config.compute_bias is True
+    assert config.compute_r2 is True
+
+    # Probabilistic metrics disabled by default (require ensemble predictions)
+    assert config.compute_crps is False
+    assert config.compute_calibration is False
+    assert config.compute_coverage is False
+
+    # Default probabilistic settings
+    assert config.n_samples == 100
+    assert config.confidence_levels == [0.50, 0.90, 0.95]
+
+
+def test_metric_config_custom():
+    """Test MetricConfig with custom values."""
+    from weather_imputation.config.evaluation import MetricConfig
+
+    config = MetricConfig(
+        compute_rmse=True,
+        compute_mae=False,
+        compute_crps=True,
+        compute_calibration=True,
+        n_samples=200,
+        confidence_levels=[0.80, 0.95],
+    )
+
+    assert config.compute_rmse is True
+    assert config.compute_mae is False
+    assert config.compute_crps is True
+    assert config.compute_calibration is True
+    assert config.n_samples == 200
+    assert config.confidence_levels == [0.80, 0.95]
+
+
+def test_metric_config_validation():
+    """Test MetricConfig validation."""
+    from weather_imputation.config.evaluation import MetricConfig
+
+    # Valid confidence levels (in 0, 1)
+    config = MetricConfig(confidence_levels=[0.50, 0.90])
+    assert config.confidence_levels == [0.50, 0.90]
+
+    # Invalid confidence level (= 0)
+    with pytest.raises(ValidationError) as exc_info:
+        MetricConfig(confidence_levels=[0.0, 0.95])
+    assert "must be in (0, 1)" in str(exc_info.value)
+
+    # Invalid confidence level (= 1)
+    with pytest.raises(ValidationError) as exc_info:
+        MetricConfig(confidence_levels=[0.50, 1.0])
+    assert "must be in (0, 1)" in str(exc_info.value)
+
+    # Invalid confidence level (> 1)
+    with pytest.raises(ValidationError) as exc_info:
+        MetricConfig(confidence_levels=[0.95, 1.5])
+    assert "must be in (0, 1)" in str(exc_info.value)
+
+
+def test_stratification_config():
+    """Test StratificationConfig with default values."""
+    from weather_imputation.config.evaluation import StratificationConfig
+
+    config = StratificationConfig()
+
+    # All stratification dimensions enabled by default
+    assert config.stratify_by_gap_length is True
+    assert config.stratify_by_season is True
+    assert config.stratify_by_variable is True
+    assert config.stratify_by_extremes is True
+
+    # Default gap length bins (1h, 6h, 24h, 72h, 168h)
+    assert config.gap_length_bins == [1, 6, 24, 72, 168]
+
+    # Default extreme percentiles (5th, 95th)
+    assert config.extreme_lower_percentile == 5.0
+    assert config.extreme_upper_percentile == 95.0
+
+
+def test_stratification_config_custom():
+    """Test StratificationConfig with custom values."""
+    from weather_imputation.config.evaluation import StratificationConfig
+
+    config = StratificationConfig(
+        stratify_by_gap_length=True,
+        stratify_by_season=False,
+        gap_length_bins=[1, 12, 48, 168],
+        extreme_lower_percentile=10.0,
+        extreme_upper_percentile=90.0,
+    )
+
+    assert config.stratify_by_gap_length is True
+    assert config.stratify_by_season is False
+    assert config.gap_length_bins == [1, 12, 48, 168]
+    assert config.extreme_lower_percentile == 10.0
+    assert config.extreme_upper_percentile == 90.0
+
+
+def test_stratification_config_validation():
+    """Test StratificationConfig validation."""
+    from weather_imputation.config.evaluation import StratificationConfig
+
+    # Valid sorted bins
+    config = StratificationConfig(gap_length_bins=[1, 6, 24, 72])
+    assert config.gap_length_bins == [1, 6, 24, 72]
+
+    # Invalid: unsorted bins
+    with pytest.raises(ValidationError) as exc_info:
+        StratificationConfig(gap_length_bins=[1, 24, 6, 72])
+    assert "sorted in ascending order" in str(exc_info.value)
+
+    # Invalid: negative bin value
+    with pytest.raises(ValidationError) as exc_info:
+        StratificationConfig(gap_length_bins=[-1, 6, 24])
+    assert "must be positive" in str(exc_info.value)
+
+
+def test_statistical_test_config():
+    """Test StatisticalTestConfig with default values."""
+    from weather_imputation.config.evaluation import StatisticalTestConfig
+
+    config = StatisticalTestConfig()
+
+    # All tests enabled by default
+    assert config.run_wilcoxon_test is True
+    assert config.run_bonferroni_correction is True
+    assert config.compute_cohens_d is True
+    assert config.compute_bootstrap_ci is True
+
+    # Default test parameters
+    assert config.alpha == 0.05
+    assert config.n_bootstrap_samples == 1000
+    assert config.bootstrap_confidence_level == 0.95
+
+
+def test_statistical_test_config_custom():
+    """Test StatisticalTestConfig with custom values."""
+    from weather_imputation.config.evaluation import StatisticalTestConfig
+
+    config = StatisticalTestConfig(
+        run_wilcoxon_test=True,
+        run_bonferroni_correction=False,
+        alpha=0.01,
+        n_bootstrap_samples=2000,
+        bootstrap_confidence_level=0.99,
+    )
+
+    assert config.run_wilcoxon_test is True
+    assert config.run_bonferroni_correction is False
+    assert config.alpha == 0.01
+    assert config.n_bootstrap_samples == 2000
+    assert config.bootstrap_confidence_level == 0.99
+
+
+def test_downstream_validation_config():
+    """Test DownstreamValidationConfig with default values."""
+    from weather_imputation.config.evaluation import DownstreamValidationConfig
+
+    config = DownstreamValidationConfig()
+
+    # Degree days enabled by default, extreme events disabled
+    assert config.compute_degree_days is True
+    assert config.compute_extreme_events is False
+
+    # Default degree day thresholds (Celsius)
+    assert config.heating_degree_day_base == 18.0
+    assert config.cooling_degree_day_base == 18.0
+    assert config.growing_degree_day_base == 10.0
+
+    # Default extreme event thresholds
+    assert config.heat_wave_threshold == 35.0
+    assert config.heat_wave_duration == 3
+    assert config.cold_snap_threshold == -10.0
+    assert config.cold_snap_duration == 3
+
+
+def test_downstream_validation_config_custom():
+    """Test DownstreamValidationConfig with custom values."""
+    from weather_imputation.config.evaluation import DownstreamValidationConfig
+
+    config = DownstreamValidationConfig(
+        compute_degree_days=True,
+        compute_extreme_events=True,
+        heating_degree_day_base=20.0,
+        cooling_degree_day_base=15.0,
+        heat_wave_threshold=40.0,
+        heat_wave_duration=5,
+    )
+
+    assert config.compute_degree_days is True
+    assert config.compute_extreme_events is True
+    assert config.heating_degree_day_base == 20.0
+    assert config.cooling_degree_day_base == 15.0
+    assert config.heat_wave_threshold == 40.0
+    assert config.heat_wave_duration == 5
+
+
+def test_evaluation_config():
+    """Test EvaluationConfig with default values."""
+    from weather_imputation.config.evaluation import EvaluationConfig
+
+    config = EvaluationConfig()
+
+    # Default output settings
+    assert config.output_format == "parquet"
+    assert config.save_predictions is True
+    assert config.save_stratified_results is True
+
+    # Default variables (Tier 1)
+    assert len(config.variables) == 6
+    assert "temperature" in config.variables
+    assert "dew_point_temperature" in config.variables
+    assert "sea_level_pressure" in config.variables
+    assert "wind_speed" in config.variables
+    assert "wind_direction" in config.variables
+    assert "relative_humidity" in config.variables
+
+    # Check nested configs are initialized
+    assert config.metrics.compute_rmse is True
+    assert config.stratification.stratify_by_gap_length is True
+    assert config.statistical_tests.run_wilcoxon_test is True
+    assert config.downstream_validation.compute_degree_days is True
+
+
+def test_evaluation_config_custom():
+    """Test EvaluationConfig with custom values."""
+    from weather_imputation.config.evaluation import (
+        EvaluationConfig,
+        MetricConfig,
+        StratificationConfig,
+    )
+
+    config = EvaluationConfig(
+        output_format="csv",
+        save_predictions=False,
+        variables=["temperature", "dew_point_temperature"],
+        metrics=MetricConfig(compute_crps=True, n_samples=200),
+        stratification=StratificationConfig(stratify_by_season=False),
+    )
+
+    assert config.output_format == "csv"
+    assert config.save_predictions is False
+    assert len(config.variables) == 2
+    assert config.metrics.compute_crps is True
+    assert config.metrics.n_samples == 200
+    assert config.stratification.stratify_by_season is False
+
+
+def test_evaluation_config_yaml_roundtrip():
+    """Test EvaluationConfig YAML serialization and deserialization."""
+    from weather_imputation.config.evaluation import (
+        EvaluationConfig,
+        MetricConfig,
+        StatisticalTestConfig,
+    )
+
+    original = EvaluationConfig(
+        output_format="json",
+        save_predictions=True,
+        variables=["temperature", "wind_speed"],
+        metrics=MetricConfig(compute_crps=True, n_samples=150),
+        statistical_tests=StatisticalTestConfig(alpha=0.01),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "evaluation_config.yaml"
+
+        # Save to YAML file
+        original.to_yaml_file(filepath)
+        assert filepath.exists()
+
+        # Load from YAML file
+        loaded = EvaluationConfig.from_yaml_file(filepath)
+
+        # Verify all custom fields match
+        assert loaded.output_format == original.output_format
+        assert loaded.save_predictions == original.save_predictions
+        assert loaded.variables == original.variables
+        assert loaded.metrics.compute_crps == original.metrics.compute_crps
+        assert loaded.metrics.n_samples == original.metrics.n_samples
+        assert loaded.statistical_tests.alpha == original.statistical_tests.alpha
+
+
+def test_evaluation_config_nested_serialization():
+    """Test EvaluationConfig nested configuration serialization."""
+    from weather_imputation.config.evaluation import EvaluationConfig
+
+    config = EvaluationConfig(output_format="csv")
+
+    # Convert to dict
+    config_dict = config.model_dump()
+    assert config_dict["output_format"] == "csv"
+    assert "metrics" in config_dict
+    assert "stratification" in config_dict
+    assert "statistical_tests" in config_dict
+    assert "downstream_validation" in config_dict
+
+    # Verify nested configs are dicts
+    assert isinstance(config_dict["metrics"], dict)
+    assert config_dict["metrics"]["compute_rmse"] is True
+    assert isinstance(config_dict["stratification"], dict)
+    assert config_dict["stratification"]["stratify_by_gap_length"] is True
+    assert isinstance(config_dict["statistical_tests"], dict)
+    assert config_dict["statistical_tests"]["run_wilcoxon_test"] is True
+    assert isinstance(config_dict["downstream_validation"], dict)
+    assert config_dict["downstream_validation"]["compute_degree_days"] is True

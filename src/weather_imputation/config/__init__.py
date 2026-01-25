@@ -8,6 +8,13 @@ from weather_imputation.config.data import (
     SplitConfig,
     StationFilterConfig,
 )
+from weather_imputation.config.evaluation import (
+    DownstreamValidationConfig,
+    EvaluationConfig,
+    MetricConfig,
+    StatisticalTestConfig,
+    StratificationConfig,
+)
 from weather_imputation.config.model import (
     CSDIConfig,
     LinearInterpolationConfig,
@@ -49,6 +56,11 @@ __all__ = [
     "SchedulerConfig",
     "EarlyStoppingConfig",
     "CheckpointConfig",
+    "EvaluationConfig",
+    "MetricConfig",
+    "StratificationConfig",
+    "StatisticalTestConfig",
+    "DownstreamValidationConfig",
     "DATA_DIR",
     "GHCNH_RAW_DIR",
     "PROCESSED_DIR",

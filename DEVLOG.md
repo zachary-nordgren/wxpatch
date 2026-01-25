@@ -187,3 +187,66 @@ This log tracks implementation progress, decisions, and findings during developm
 - Ruff auto-fix handles UP045 (modernize type hints) cleanly
 
 **Confidence:** KNOWN - Directly implements SPEC.md section 3.4 training configuration and NFR-004, NFR-006, NFR-009 requirements. Follows best practices from PyTorch training literature (gradient clipping, mixed precision, warmup).
+
+---
+
+### TASK-005: Evaluation Configuration Classes
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/config/evaluation.py` with 5 configuration classes:
+  - `MetricConfig`: Point metrics (RMSE, MAE, Bias, R²) and probabilistic metrics (CRPS, calibration, coverage)
+  - `StratificationConfig`: Stratified evaluation by gap length, season, variable, extremes
+  - `StatisticalTestConfig`: Wilcoxon signed-rank test, Bonferroni correction, Cohen's d, bootstrap CI
+  - `DownstreamValidationConfig`: Degree days (heating/cooling/growing) and extreme event detection
+  - `EvaluationConfig`: Main configuration aggregating all sub-configs + output settings
+- Added 14 comprehensive tests to `tests/test_config.py` (all passing, now 76 tests total)
+- Updated `src/weather_imputation/config/__init__.py` to export new classes
+
+**Key Design Decisions:**
+- Point metrics enabled by default (RMSE, MAE, Bias, R²) - required for all methods
+- Probabilistic metrics disabled by default (CRPS, calibration, coverage) - only for CSDI/ensemble methods
+- All stratification dimensions enabled by default (gap length, season, variable, extremes)
+- Default gap length bins: [1, 6, 24, 72, 168] hours (short, medium, long, very long gaps)
+- Default extreme percentiles: 5th and 95th (standard practice)
+- Default statistical tests: Wilcoxon + Bonferroni + Cohen's d + bootstrap CI (all enabled)
+- Degree days enabled by default (FR-015: SHOULD), extreme events disabled (FR-016: COULD)
+- Default degree day thresholds from meteorology standards (18°C heating/cooling, 10°C growing)
+- Default output format: parquet (efficient for large result tables)
+- Save predictions and stratified results by default (enables re-analysis without re-running)
+
+**Implementation Notes:**
+- Implements FR-011 through FR-016 from SPEC.md
+- MetricConfig validates confidence levels are in (0, 1) exclusive
+- StratificationConfig validates gap_length_bins are sorted and positive
+- Default n_samples=100 for CSDI probabilistic metrics (balances cost vs uncertainty quality)
+- Default confidence_levels=[0.50, 0.90, 0.95] for prediction intervals
+- Default alpha=0.05 for statistical significance tests (standard p-value threshold)
+- Default n_bootstrap_samples=1000 (sufficient for stable CI estimates)
+- Default heat_wave_threshold=35°C, cold_snap_threshold=-10°C (reasonable for North America)
+- Default event duration=3 days (meteorological definition)
+
+**Test Coverage:**
+- Default values for all 5 config classes
+- Custom values and overrides
+- Validation errors (invalid confidence levels, unsorted bins, out-of-range percentiles)
+- YAML roundtrip serialization
+- Nested configuration serialization (EvaluationConfig contains 4 sub-configs)
+- Edge cases (confidence levels at boundaries, negative gap bins)
+
+**Files Modified:**
+- `src/weather_imputation/config/evaluation.py` (created, 256 lines)
+- `src/weather_imputation/config/__init__.py` (added evaluation config exports)
+- `tests/test_config.py` (added 14 tests, now 76 tests total)
+- `TODO.md` (marked TASK-005 as DONE)
+
+**Lessons Learned:**
+- Pydantic field validators can access the entire list/value and validate element-wise
+- For multi-line field descriptions, use parentheses to wrap the string for better readability
+- Ruff E501 enforces 100 character line limit - use parentheses for long descriptions
+- Configuration classes should provide sensible defaults that work for most use cases
+- Probabilistic metrics should be opt-in (require more compute, only apply to certain models)
+- Stratification dimensions should be opt-out (important for comprehensive evaluation)
+
+**Confidence:** KNOWN - Directly implements SPEC.md section 3.2 (evaluation component), FR-011 through FR-016. Defaults based on meteorological standards and statistical best practices.

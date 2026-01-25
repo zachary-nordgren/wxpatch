@@ -55,10 +55,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created 5 configuration classes: OptimizerConfig, SchedulerConfig, EarlyStoppingConfig, CheckpointConfig, and TrainingConfig. Added 17 comprehensive tests, all passing. Implements NFR-004, NFR-006, NFR-009 requirements from SPEC.md.
 
 #### TASK-005: Create evaluation configuration classes
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_config.py::test_evaluation_config -v` passes
 - **Context:** `src/weather_imputation/config/evaluation.py`, `tests/test_config.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created 5 evaluation configuration classes: MetricConfig, StratificationConfig, StatisticalTestConfig, DownstreamValidationConfig, and EvaluationConfig. Added 14 comprehensive tests, all passing. Implements FR-011 through FR-016 from SPEC.md.
 
 ### Data Pipeline
 
