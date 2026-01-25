@@ -497,3 +497,80 @@ def extract_tier1_variables(
         return pl.DataFrame()
 
     return df.select(available_columns)
+
+
+def filter_by_quality_flags(
+    df: pl.DataFrame,
+    variables: list[str] | None = None,
+    exclude_erroneous: bool = True,
+    exclude_suspect: bool = False,
+) -> pl.DataFrame:
+    """Filter observations by quality control flags.
+
+    Removes observations with poor quality flags based on GHCNh quality code definitions.
+    By default, excludes erroneous values (QC codes indicating data errors).
+
+    Quality code definitions (from GHCNh documentation Section VI):
+    - Legacy codes for sources 313-346:
+      - 0: Passed gross limits check
+      - 1: Passed all QC checks
+      - 2: Suspect
+      - 3: Erroneous
+      - 4-9, A-Z: Various QC flags
+    - Legacy codes for sources 220-223, 347-348:
+      - 0: Not checked
+      - 1: Good
+      - 2: Suspect
+      - 3: Erroneous
+
+    Args:
+        df: DataFrame containing GHCNh data with Quality_Code columns
+        variables: List of variables to filter. If None, filters all Tier 1 variables.
+        exclude_erroneous: If True, set erroneous values to null (default: True)
+        exclude_suspect: If True, also set suspect values to null (default: False)
+
+    Returns:
+        DataFrame with poor-quality observations set to null for each variable.
+        Quality_Code columns are preserved for reference.
+
+    Example:
+        >>> df = load_station_year("USW00003046", 2023)
+        >>> df_filtered = filter_by_quality_flags(df)
+        >>> # Erroneous temperature values are now null
+    """
+    if variables is None:
+        variables = TIER1_VARIABLES
+
+    # Build list of quality codes to exclude
+    exclude_codes = []
+    if exclude_erroneous:
+        exclude_codes.extend(["3", "7"])  # Erroneous codes
+    if exclude_suspect:
+        exclude_codes.extend(["2", "6"])  # Suspect codes
+
+    if not exclude_codes:
+        logger.info("No quality codes to filter - returning original DataFrame")
+        return df
+
+    # Apply quality filtering for each variable
+    filter_expressions = []
+    for var in variables:
+        qc_col = f"{var}_Quality_Code"
+
+        if qc_col not in df.columns or var not in df.columns:
+            continue
+
+        # Set variable value to null when quality code indicates bad data
+        # Use when().then().otherwise() to conditionally set values
+        filtered_value = pl.when(
+            pl.col(qc_col).cast(pl.Utf8).is_in(exclude_codes)
+        ).then(None).otherwise(pl.col(var))
+
+        filter_expressions.append(filtered_value.alias(var))
+
+    if not filter_expressions:
+        logger.warning("No quality code columns found - returning original DataFrame")
+        return df
+
+    # Apply all filter expressions at once
+    return df.with_columns(filter_expressions)

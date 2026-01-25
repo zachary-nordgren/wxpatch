@@ -8,6 +8,7 @@ from weather_imputation.data.ghcnh_loader import (
     TIER1_VARIABLES,
     VARIABLE_SUFFIXES,
     extract_tier1_variables,
+    filter_by_quality_flags,
 )
 
 
@@ -256,3 +257,281 @@ def test_variable_suffixes_constant_complete() -> None:
     ]
 
     assert expected_suffixes == VARIABLE_SUFFIXES
+
+
+# ===== Quality Flag Filtering Tests =====
+
+
+@pytest.fixture
+def sample_data_with_quality_codes() -> pl.DataFrame:
+    """Create sample data with various quality codes for testing."""
+    return pl.DataFrame({
+        "STATION": ["USW00003046"] * 6,
+        "Station_name": ["TEST STATION"] * 6,
+        "DATE": [
+            "2023-01-01 00:00",
+            "2023-01-01 01:00",
+            "2023-01-01 02:00",
+            "2023-01-01 03:00",
+            "2023-01-01 04:00",
+            "2023-01-01 05:00",
+        ],
+        "LATITUDE": [40.7128] * 6,
+        "LONGITUDE": [-74.0060] * 6,
+        # Temperature with various quality codes
+        "temperature": [15.5, 14.8, 14.2, 13.9, 13.5, 13.2],
+        # QC: 1=good, 2=suspect, 3=erroneous, 6=suspect, 7=erroneous, 0=not checked
+        "temperature_Quality_Code": ["1", "2", "3", "6", "7", "0"],
+        # Wind speed with various quality codes
+        "wind_speed": [5.5, 6.2, 4.8, 7.1, 8.3, 5.0],
+        "wind_speed_Quality_Code": ["1", "3", "2", "7", "1", "0"],
+    })
+
+
+def test_quality_filtering_default_exclude_erroneous(
+    sample_data_with_quality_codes: pl.DataFrame,
+) -> None:
+    """Test default behavior excludes erroneous codes (3, 7)."""
+    result = filter_by_quality_flags(sample_data_with_quality_codes)
+
+    # Row 0: QC=1 (good) -> should keep value
+    assert result["temperature"][0] == 15.5
+    assert result["wind_speed"][0] == 5.5
+
+    # Row 1: temp QC=2 (suspect) -> should keep (not excluded by default)
+    assert result["temperature"][1] == 14.8
+
+    # Row 2: temp QC=3 (erroneous) -> should be null
+    assert result["temperature"][2] is None
+    # Row 2: wind QC=3 (erroneous) -> should be null
+    assert result["wind_speed"][1] is None
+
+    # Row 3: temp QC=6 (suspect) -> should keep (not excluded by default)
+    assert result["temperature"][3] == 13.9
+
+    # Row 4: temp QC=7 (erroneous) -> should be null
+    assert result["temperature"][4] is None
+    # Row 4: wind QC=7 (erroneous) -> should be null
+    assert result["wind_speed"][3] is None
+
+    # Row 5: QC=0 (not checked) -> should keep value
+    assert result["temperature"][5] == 13.2
+    assert result["wind_speed"][5] == 5.0
+
+
+def test_quality_filtering_exclude_suspect(sample_data_with_quality_codes: pl.DataFrame) -> None:
+    """Test excluding both erroneous (3, 7) and suspect (2, 6) codes."""
+    result = filter_by_quality_flags(
+        sample_data_with_quality_codes,
+        exclude_erroneous=True,
+        exclude_suspect=True,
+    )
+
+    # Row 0: QC=1 (good) -> should keep
+    assert result["temperature"][0] == 15.5
+
+    # Row 1: temp QC=2 (suspect) -> should be null
+    assert result["temperature"][1] is None
+    # Row 2: wind QC=2 (suspect) -> should be null
+    assert result["wind_speed"][2] is None
+
+    # Row 2: temp QC=3 (erroneous) -> should be null
+    assert result["temperature"][2] is None
+
+    # Row 3: temp QC=6 (suspect) -> should be null
+    assert result["temperature"][3] is None
+
+    # Row 4: temp QC=7 (erroneous) -> should be null
+    assert result["temperature"][4] is None
+
+    # Row 5: QC=0 (not checked) -> should keep
+    assert result["temperature"][5] == 13.2
+
+
+def test_quality_filtering_no_exclusions(sample_data_with_quality_codes: pl.DataFrame) -> None:
+    """Test that no filtering occurs when both exclude flags are False."""
+    result = filter_by_quality_flags(
+        sample_data_with_quality_codes,
+        exclude_erroneous=False,
+        exclude_suspect=False,
+    )
+
+    # All values should be preserved
+    assert result["temperature"].to_list() == [15.5, 14.8, 14.2, 13.9, 13.5, 13.2]
+    assert result["wind_speed"].to_list() == [5.5, 6.2, 4.8, 7.1, 8.3, 5.0]
+
+
+def test_quality_filtering_subset_of_variables(
+    sample_data_with_quality_codes: pl.DataFrame,
+) -> None:
+    """Test filtering only specific variables."""
+    result = filter_by_quality_flags(
+        sample_data_with_quality_codes,
+        variables=["temperature"],
+    )
+
+    # Temperature QC=3, 7 should be filtered
+    assert result["temperature"][2] is None
+    assert result["temperature"][4] is None
+
+    # Wind speed should NOT be filtered (not in variables list)
+    assert result["wind_speed"][1] == 6.2  # QC=3, but not filtered
+    assert result["wind_speed"][3] == 7.1  # QC=7, but not filtered
+
+
+def test_quality_filtering_preserves_quality_code_columns(
+    sample_data_with_quality_codes: pl.DataFrame,
+) -> None:
+    """Test that Quality_Code columns are preserved in output."""
+    result = filter_by_quality_flags(sample_data_with_quality_codes)
+
+    # Quality code columns should still exist
+    assert "temperature_Quality_Code" in result.columns
+    assert "wind_speed_Quality_Code" in result.columns
+
+    # Quality codes should be unchanged
+    assert result["temperature_Quality_Code"].to_list() == ["1", "2", "3", "6", "7", "0"]
+    assert result["wind_speed_Quality_Code"].to_list() == ["1", "3", "2", "7", "1", "0"]
+
+
+def test_quality_filtering_missing_quality_code_column() -> None:
+    """Test filtering when Quality_Code column is missing for a variable."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046"],
+        "temperature": [15.5],
+        # Missing temperature_Quality_Code column
+        "wind_speed": [5.5],
+        "wind_speed_Quality_Code": ["3"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Temperature should be unchanged (no QC column to filter by)
+    assert result["temperature"][0] == 15.5
+
+    # Wind speed should be filtered (has QC column with erroneous code)
+    assert result["wind_speed"][0] is None
+
+
+def test_quality_filtering_missing_variable_column() -> None:
+    """Test filtering when variable column is missing but QC column exists."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046"],
+        "temperature_Quality_Code": ["3"],
+        "wind_speed": [5.5],
+        "wind_speed_Quality_Code": ["1"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Wind speed should be unchanged (good QC)
+    assert result["wind_speed"][0] == 5.5
+
+    # Should not fail on missing temperature column
+    assert "temperature" not in result.columns
+
+
+def test_quality_filtering_empty_dataframe() -> None:
+    """Test filtering on empty DataFrame."""
+    empty_df = pl.DataFrame()
+    result = filter_by_quality_flags(empty_df)
+
+    # Should return empty DataFrame without errors
+    assert result.is_empty()
+
+
+def test_quality_filtering_no_matching_columns() -> None:
+    """Test filtering when no requested columns exist."""
+    df = pl.DataFrame({
+        "random_column": [1, 2, 3],
+        "another_column": ["a", "b", "c"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Should return original DataFrame unchanged
+    assert result.columns == df.columns
+    assert result.height == df.height
+
+
+def test_quality_filtering_with_nulls_in_quality_codes() -> None:
+    """Test filtering handles null values in Quality_Code columns."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046"] * 3,
+        "temperature": [15.5, 14.8, 14.2],
+        "temperature_Quality_Code": ["1", None, "3"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Row 0: QC=1 (good) -> should keep
+    assert result["temperature"][0] == 15.5
+
+    # Row 1: QC=None -> should keep (null doesn't match exclude codes)
+    assert result["temperature"][1] == 14.8
+
+    # Row 2: QC=3 (erroneous) -> should be null
+    assert result["temperature"][2] is None
+
+
+def test_quality_filtering_with_nulls_in_variable_values() -> None:
+    """Test filtering preserves null values in variable columns."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046"] * 3,
+        "temperature": [15.5, None, 14.2],
+        "temperature_Quality_Code": ["1", "1", "3"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Row 0: good value and QC -> should keep
+    assert result["temperature"][0] == 15.5
+
+    # Row 1: already null -> should stay null
+    assert result["temperature"][1] is None
+
+    # Row 2: erroneous QC -> should become null
+    assert result["temperature"][2] is None
+
+
+def test_quality_filtering_preserves_dataframe_structure() -> None:
+    """Test that filtering preserves row count and non-variable columns."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046", "USW00012345"],
+        "DATE": ["2023-01-01 00:00", "2023-01-01 01:00"],
+        "LATITUDE": [40.7128, 41.0000],
+        "temperature": [15.5, 14.8],
+        "temperature_Quality_Code": ["1", "3"],
+        "extra_column": ["A", "B"],
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Should have same number of rows
+    assert result.height == 2
+
+    # Should preserve all columns
+    assert "STATION" in result.columns
+    assert "DATE" in result.columns
+    assert "LATITUDE" in result.columns
+    assert "extra_column" in result.columns
+
+    # Non-variable columns should be unchanged
+    assert result["STATION"].to_list() == ["USW00003046", "USW00012345"]
+    assert result["extra_column"].to_list() == ["A", "B"]
+
+
+def test_quality_filtering_numeric_quality_codes() -> None:
+    """Test filtering with numeric Quality_Code values (cast to string)."""
+    df = pl.DataFrame({
+        "STATION": ["USW00003046"] * 3,
+        "temperature": [15.5, 14.8, 14.2],
+        "temperature_Quality_Code": [1, 2, 3],  # Numeric instead of string
+    })
+
+    result = filter_by_quality_flags(df)
+
+    # Should cast to string and filter correctly
+    assert result["temperature"][0] == 15.5  # QC=1 (good)
+    assert result["temperature"][1] == 14.8  # QC=2 (suspect, not excluded by default)
+    assert result["temperature"][2] is None  # QC=3 (erroneous)

@@ -301,3 +301,70 @@ This log tracks implementation progress, decisions, and findings during developm
 - Pre-existing line length violations in file are not blockers for new code
 
 **Confidence:** KNOWN - Implements FR-004 from SPEC.md (6-variable imputation), leverages well-documented GHCNh schema with 6 attributes per variable. Tests validate all requirements.
+
+---
+
+### TASK-007: Quality Flag Filtering
+
+**Status:** Completed
+
+**Implementation:**
+- Created `filter_by_quality_flags()` function in `src/weather_imputation/data/ghcnh_loader.py`:
+  - Filters observations by quality control flags from GHCNh Quality_Code columns
+  - Excludes erroneous values (QC codes 3, 7) by default
+  - Optionally excludes suspect values (QC codes 2, 6) with `exclude_suspect=True`
+  - Sets poor-quality values to null while preserving Quality_Code columns for reference
+  - Works with all Tier 1 variables or a custom subset
+  - Handles missing columns gracefully (only filters columns that exist)
+- Added 13 comprehensive tests to `tests/test_ghcnh_loader.py` (all passing, now 24 tests total):
+  - Default behavior (exclude erroneous codes 3, 7)
+  - Optional suspect exclusion (codes 2, 6)
+  - No exclusions mode (both flags False)
+  - Subset filtering (specific variables)
+  - Quality_Code column preservation
+  - Missing column handling (QC or variable)
+  - Empty DataFrame handling
+  - No matching columns handling
+  - Null handling in Quality_Code and variable columns
+  - DataFrame structure preservation
+  - Numeric quality code casting
+
+**Key Design Decisions:**
+- **Null assignment vs row deletion:** Sets values to null rather than deleting rows to preserve temporal continuity and allow analysis of data quality patterns
+- **Quality_Code preservation:** Keeps Quality_Code columns in output for traceability and further analysis
+- **Default to conservative filtering:** Excludes only erroneous codes (3, 7) by default, requiring explicit opt-in for suspect codes (2, 6)
+- **Quality code definitions from GHCNh documentation Section VI:**
+  - Legacy codes for sources 313-346: 0=passed gross limits, 1=passed all checks, 2=suspect, 3=erroneous
+  - Legacy codes for sources 220-223, 347-348: 0=not checked, 1=good, 2=suspect, 3=erroneous
+  - Focus on codes that indicate errors across both systems (3, 7)
+- **Polars conditional expressions:** Uses `pl.when().then().otherwise()` pattern for efficient null assignment
+- **Type casting:** Automatically casts Quality_Code to string for consistent comparisons (handles both string and numeric QC columns)
+
+**Implementation Notes:**
+- Function signature: `filter_by_quality_flags(df, variables=None, exclude_erroneous=True, exclude_suspect=False)`
+- Returns DataFrame with same structure (columns, rows) but poor-quality values set to null
+- Logs info/warning when no columns match or no quality codes to filter
+- Does not modify input DataFrame (pure function)
+- Applies all filter expressions at once using `df.with_columns()` for efficiency
+
+**Test Coverage:**
+- All 13 tests passing (100% of quality filtering tests)
+- Covers happy path, edge cases, error cases
+- Validates data integrity (values, structure, nulls preserved correctly)
+- Validates behavior with different flag combinations
+- Tests both programmatic use cases and defensive error handling
+
+**Files Modified:**
+- `src/weather_imputation/data/ghcnh_loader.py` (added filter_by_quality_flags function, ~60 lines)
+- `tests/test_ghcnh_loader.py` (added 13 tests, now 24 tests total, 485 lines)
+- `TODO.md` (marked TASK-007 as DONE)
+
+**Lessons Learned:**
+- GHCNh has multiple quality code systems depending on data source (sources 313-346 vs 220-223/347-348)
+- Quality codes 3 and 7 consistently indicate erroneous data across different source systems
+- Setting values to null rather than deleting rows is important for preserving temporal structure
+- Polars `pl.when().then().otherwise()` is cleaner than boolean masking for conditional value assignment
+- Polars `.cast(pl.Utf8)` safely handles both string and numeric Quality_Code columns
+- Test naming with descriptive suffixes makes it clear what each test validates
+
+**Confidence:** KNOWN - Directly implements FR-007 from SPEC.md (quality control filtering). Quality code definitions from official GHCNh documentation Section VI (Table 3). Defensive programming handles real-world data issues (missing columns, nulls, mixed types).
