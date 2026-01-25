@@ -75,10 +75,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created `filter_by_quality_flags()` function that filters observations by quality control flags. By default excludes erroneous values (QC codes 3, 7), with optional suspect exclusion (QC codes 2, 6). Sets poor-quality values to null while preserving Quality_Code columns for reference. Added 13 comprehensive tests covering default behavior, suspect exclusion, subset filtering, missing columns, null handling, and edge cases. All tests passing. Implementation based on GHCNh documentation Section VI quality code definitions.
 
 #### TASK-008: Create masking strategy for MCAR (Missing Completely At Random)
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_masking.py::test_mcar_masking -v` passes
 - **Context:** `src/weather_imputation/data/masking.py`, `tests/test_masking.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Implemented MCAR masking with gap-based strategy, 17 tests passing. Added PyTorch and NumPy as dependencies.
 
 #### TASK-009: Create masking strategy for MAR (Missing At Random)
 - **Status:** TODO
