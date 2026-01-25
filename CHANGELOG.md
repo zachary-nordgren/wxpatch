@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.3.0] - 2026-01-25 - Base Configuration Infrastructure
+
+### New Features
+
+- **Pydantic v2 Base Configuration Classes**
+  - Created `BaseConfig` class with YAML/JSON serialization support
+  - Created `ExperimentConfig` class for experiment metadata tracking
+  - Type-safe configuration loading and validation
+  - Automatic parent directory creation when saving configs
+  - Support for nested configuration structures
+
+- **Configuration Features:**
+  - YAML and JSON file I/O (`to_yaml_file()`, `from_yaml_file()`, `to_json_file()`, `from_json_file()`)
+  - Dictionary conversion (`to_dict()`, `from_dict()`)
+  - Validation on assignment (catches errors at runtime)
+  - Extra field protection (raises errors for unknown configuration keys)
+  - Support for arbitrary types (Path, etc.)
+
+### Dependencies
+
+- **Added PyYAML>=6.0.0** to project dependencies for YAML serialization
+
+### Files Added
+
+- `src/weather_imputation/config/base.py` - Base configuration classes
+- `tests/test_config.py` - Comprehensive test suite (14 tests)
+- `DEVLOG.md` - Development log for tracking implementation decisions
+
+### Files Modified
+
+- `src/weather_imputation/config/__init__.py` - Export BaseConfig and ExperimentConfig
+- `pyproject.toml` - Added PyYAML dependency
+- `TODO.md` - Marked TASK-001 as completed
+
+### Test Coverage
+
+```bash
+# Run all configuration tests
+uv run pytest tests/test_config.py -v
+
+# All 14 tests passing:
+# - Basic instantiation and defaults
+# - Validation errors (missing fields, wrong types, extra fields)
+# - Dictionary/YAML/JSON serialization and deserialization
+# - File I/O roundtrips
+# - Parent directory creation
+# - Nested configuration support
+```
+
+---
+
 ## [0.2.6] - 2026-01-20 - Parallel Metadata Computation
 
 ### New Features
