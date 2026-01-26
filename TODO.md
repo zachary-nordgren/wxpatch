@@ -125,10 +125,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 ### Classical Baselines
 
 #### TASK-016: Implement BaseImputer protocol
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_base_imputer.py::test_protocol_compliance -v` passes
 - **Context:** `src/weather_imputation/models/base.py`, `tests/test_base_imputer.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Created Imputer Protocol and BaseImputer base class with 28 comprehensive tests (all passing). Implements SPEC.md section 6.2 API contract using PyTorch tensors.
 
 #### TASK-017: Implement linear interpolation baseline
 - **Status:** TODO

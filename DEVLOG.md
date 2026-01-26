@@ -4,6 +4,79 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - BaseImputer Protocol Implementation (v0.3.5)
+
+### TASK-016: Implement BaseImputer Protocol
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/models/base.py` to match SPEC.md section 6.2 API contract
+- Created `Imputer` Protocol with required methods: `fit()`, `impute()`, `save()`, `load()`
+- Created `BaseImputer` base class providing common functionality:
+  - Fitted state tracking (`is_fitted` property)
+  - Input validation (`_validate_inputs()`)
+  - Hyperparameter storage (`get_hyperparameters()`)
+  - Metadata save/load (`_save_metadata()`, `_load_metadata()`)
+- Created comprehensive test suite: 28 tests covering all functionality
+- All tests passing, ruff checks passing
+
+**Key Design Decisions:**
+- **Protocol-based design**: `Imputer` is a Python Protocol (duck typing) allowing any class to implement the interface
+- **PyTorch tensors**: All data operations use PyTorch Tensors (not Polars DataFrames) per SPEC.md
+- **Tensor shapes**: (N, T, V) = (batch, time, variables) convention
+- **Mask convention**: True=observed, False=missing
+- **BaseImputer optional**: Models can inherit from BaseImputer or implement Imputer protocol directly
+- **fit() takes DataLoader**: Deep learning methods need batched data; classical methods can iterate once
+- **impute() is stateless**: Takes observed/mask tensors, returns imputed tensor
+- **save()/load() use Path**: Directory-based saving (can contain multiple files)
+
+**API Contract:**
+```python
+class Imputer(Protocol):
+    def fit(self, train_loader: DataLoader, val_loader: DataLoader | None) -> None
+    def impute(self, observed: Tensor, mask: Tensor) -> Tensor
+    def save(self, path: Path) -> None
+    def load(self, path: Path) -> None
+```
+
+**BaseImputer Utilities:**
+- `_check_fitted()`: Raises RuntimeError if not fitted
+- `_validate_inputs()`: Checks tensor shapes, types, dimensions
+- `_save_metadata()`: Saves name, fitted state, hyperparameters
+- `_load_metadata()`: Loads metadata from disk
+- `get_hyperparameters()`: Returns copy of hyperparameters dict
+
+**Test Coverage:**
+- Protocol compliance: runtime type checking, required methods
+- Initialization: name, default name
+- Fitted state: before fit, after fit, check_fitted raises/passes
+- Input validation: wrong types, wrong dimensions, shape mismatch, wrong dtype
+- Hyperparameters: get, returns copy (defensive)
+- Save/load: metadata save, directory creation, metadata load, not found error, roundtrip
+- Integration: full workflow (fit→impute→save→load→impute), multiple impute calls, different batch sizes, sequence lengths, variable counts
+
+**Lessons Learned:**
+- Protocol (PEP 544) enables structural subtyping without inheritance
+- `@runtime_checkable` allows `isinstance()` checks for protocols
+- PyTorch tensors provide unified interface for classical and deep learning methods
+- Separation of concerns: Protocol defines interface, BaseImputer provides utilities
+- Defensive programming: validate inputs, check fitted state, return copies of mutable data
+
+**Implementation Challenges:**
+- Replaced legacy Polars-based API with PyTorch tensor API
+- Balanced flexibility (protocol) with convenience (base class)
+- Comprehensive validation without excessive boilerplate
+
+**Confidence:** KNOWN - Implements SPEC.md section 6.2 API contract. Protocol pattern is standard Python (PEP 544). PyTorch tensor operations are well-documented.
+
+**Next Steps:**
+- TASK-017: Implement linear interpolation baseline
+- TASK-018: Implement Akima spline interpolation
+- TASK-019: Implement MICE imputation
+
+---
+
 ## 2026-01-26 - Data Pipeline: DataLoader Collation (v0.3.4)
 
 ### TASK-015: Implement DataLoader with Collation Function
