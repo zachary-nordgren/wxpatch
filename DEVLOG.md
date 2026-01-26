@@ -4,6 +4,89 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Akima Spline Interpolation Baseline Implementation (v0.3.7)
+
+### TASK-018: Implement Akima Spline Interpolation
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/models/classical/spline.py` to conform to Imputer protocol
+- Uses PyTorch tensors (N, T, V) instead of legacy Polars DataFrames
+- Implements Akima spline interpolation using scipy.interpolate.Akima1DInterpolator
+- Created comprehensive test suite: 24 tests in `tests/test_models.py` (all passing)
+- Added scipy>=1.10.0 dependency to pyproject.toml
+- Ruff checks passing
+
+**Key Design Decisions:**
+- **Akima spline algorithm**: Uses piecewise cubic polynomials (Akima 1970 method)
+- **Advantages over cubic splines**:
+  - Stability with respect to outliers
+  - No unphysical oscillations in regions with rapidly changing derivatives
+  - Local computation (only uses neighboring points)
+- **max_gap_length parameter**: Optional limit on gap size to interpolate (in timesteps)
+  - If None (default), all gaps are filled regardless of size
+  - If specified, only gaps ≤ max_gap_length are interpolated
+- **Boundary handling**:
+  - Leading missing values: forward-filled from first observed value
+  - Trailing missing values: backward-filled from last observed value
+- **Edge case handling**:
+  - All observed → no-op
+  - All missing → zeros
+  - Single observed value → fill entire series with that value
+  - <2 observed points → fallback to linear interpolation
+- **Independent processing**: Each sample and variable processed independently
+- **Deterministic**: No randomness, fully reproducible
+
+**Implementation Details:**
+- `fit()`: No-op for Akima interpolation (non-parametric method)
+- `impute()`: Main method that processes each (sample, variable) pair via `_interpolate_1d()`
+- `_interpolate_1d()`: Core interpolation logic for single time series
+  - Converts PyTorch tensors to numpy for scipy.interpolate.Akima1DInterpolator
+  - Creates Akima interpolator with observed indices and values
+  - Iterates through gaps and applies Akima interpolation
+  - Converts results back to PyTorch tensors with correct device/dtype
+  - Handles boundaries via forward/backward fill
+- `_linear_interpolate_1d()`: Fallback method if Akima fails (e.g., all identical values)
+- `save()/load()`: Saves hyperparameters (max_gap_length) as JSON + metadata as PyTorch checkpoint
+
+**Test Coverage:**
+- Initialization: basic, with max_gap_length
+- Protocol compliance: isinstance(Imputer)
+- Fit/fitted state: before/after fit, raises before fit
+- Interpolation correctness: simple gap, smooth curve, leading/trailing missing, all observed/missing, single observed value
+- Multiple dimensions: multiple variables, multiple samples in batch
+- max_gap_length: respected
+- Comparison: Akima vs linear difference test
+- Save/load: metadata persistence, roundtrip imputation
+- Input validation: wrong types, dimensions, shape mismatch, mask dtype
+- Reproducibility: deterministic results
+
+**Lessons Learned:**
+- Akima splines excel for smooth data with outliers or rapidly changing derivatives
+- SciPy's Akima1DInterpolator requires numpy arrays, necessitating PyTorch→numpy→PyTorch conversions
+- Fallback to linear interpolation necessary for edge cases (constant values, <2 points)
+- For mostly linear data, Akima produces similar results to linear interpolation but handles curves better
+- Akima splines are non-parametric and deterministic (no training or randomness)
+- Gap-based interpolation (vs point-wise) more realistic for weather sensor failures
+
+**Implementation Challenges:**
+- None - straightforward implementation once Imputer protocol was established and scipy was added
+- NumPy/PyTorch conversions handled cleanly with .cpu().numpy() and torch.from_numpy()
+- Legacy Polars API required complete rewrite, but new PyTorch API is cleaner
+
+**Confidence:** KNOWN - Implements standard Akima spline interpolation for time series using scipy.interpolate.Akima1DInterpolator. Algorithm is deterministic and well-tested. Conforms to Imputer protocol from SPEC.md section 6.2. Akima (1970) method is well-established in literature.
+
+**References:**
+- [Akima spline - Wikipedia](https://en.wikipedia.org/wiki/Akima_spline)
+- [Akima1DInterpolator — SciPy Documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.Akima1DInterpolator.html)
+- Akima, H. (1970). "A new method of interpolation and smooth curve fitting based on local procedures". Journal of the ACM, 17(4), 589-602.
+
+**Next Steps:**
+- TASK-019: Implement MICE (Multiple Imputation by Chained Equations)
+
+---
+
 ## 2026-01-26 - Linear Interpolation Baseline Implementation (v0.3.6)
 
 ### TASK-017: Implement Linear Interpolation Baseline

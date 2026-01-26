@@ -137,10 +137,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Implemented LinearInterpolationImputer with 25 comprehensive tests (all passing). Supports max_gap_length parameter to limit interpolation to short gaps. Uses PyTorch tensors conforming to new Imputer protocol. Handles edge cases: leading/trailing missing values, all observed/missing, multiple variables/samples. Ruff checks passing.
 
 #### TASK-018: Implement Akima spline interpolation
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_models.py::test_akima_spline -v` passes
 - **Context:** `src/weather_imputation/models/classical/spline.py`, `tests/test_models.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented AkimaSplineImputer using scipy.interpolate.Akima1DInterpolator. Created 24 comprehensive tests (all passing). Added scipy>=1.10.0 dependency. Ruff checks passing. Uses PyTorch tensors conforming to Imputer protocol. Includes linear fallback for edge cases.
 
 #### TASK-019: Implement MICE (Multiple Imputation by Chained Equations)
 - **Status:** TODO
