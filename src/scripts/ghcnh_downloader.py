@@ -23,31 +23,31 @@ Usage:
 import argparse
 import json
 import logging
-import time
 import re
+import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from collections import deque
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
 from threading import Lock, Semaphore
-from typing import List, Tuple, Optional, Generator
+from typing import Any
 
 import requests
 from rich.console import Console
 from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
-    BarColumn,
     TextColumn,
-    MofNCompleteColumn,
     TimeElapsedColumn,
-    TaskID,
 )
 
-from weather_imputation.config.paths import DATA_DIR, GHCNH_RAW_DIR
 from weather_imputation.config.download import DEFAULT_DOWNLOAD_SETTINGS
+from weather_imputation.config.paths import GHCNH_RAW_DIR
 
 # Use settings from config
 DOWNLOAD_TIMEOUT = DEFAULT_DOWNLOAD_SETTINGS.timeout_seconds
@@ -72,7 +72,11 @@ INITIAL_CONCURRENT = 8  # Start conservative
 MAX_CONCURRENT = 12  # Maximum concurrent downloads
 MIN_CONCURRENT = 2  # Minimum concurrent downloads
 RATE_LIMIT_CODES = {429, 503, 504}  # HTTP codes indicating rate limiting
-CONNECTION_RESET_ERRORS = (ConnectionResetError, ConnectionError, requests.exceptions.ConnectionError)
+CONNECTION_RESET_ERRORS = (
+    ConnectionResetError,
+    ConnectionError,
+    requests.exceptions.ConnectionError,
+)
 
 # Log file path
 LOG_FILE = Path(__file__).parent / "ghcnh_downloader.log"
@@ -80,7 +84,7 @@ LOG_FILE = Path(__file__).parent / "ghcnh_downloader.log"
 logger = logging.getLogger("weather_processor")
 
 
-def setup_logging(verbose: bool = False, quiet: bool = False):
+def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     """Configure logging for standalone execution with both console and file output."""
     level = logging.DEBUG if verbose else (logging.WARNING if quiet else logging.INFO)
 
@@ -122,10 +126,10 @@ class DownloadStats:
     total_bytes: int = 0
     downloaded_bytes: int = 0
     start_time: float = field(default_factory=time.time)
-    recent_speeds: deque = field(default_factory=lambda: deque(maxlen=20))
+    recent_speeds: deque[float] = field(default_factory=lambda: deque(maxlen=20))
     lock: Lock = field(default_factory=Lock)
 
-    def add_download(self, bytes_downloaded: int, duration: float):
+    def add_download(self, bytes_downloaded: int, duration: float) -> None:
         """Record a completed download for bandwidth estimation."""
         with self.lock:
             self.downloaded_bytes += bytes_downloaded
@@ -134,12 +138,12 @@ class DownloadStats:
                 speed = bytes_downloaded / duration
                 self.recent_speeds.append(speed)
 
-    def add_failure(self):
+    def add_failure(self) -> None:
         """Record a failed download."""
         with self.lock:
             self.failed_files += 1
 
-    def add_skip(self, bytes_size: int):
+    def add_skip(self, bytes_size: int) -> None:
         """Record a skipped file (already downloaded)."""
         with self.lock:
             self.skipped_files += 1
@@ -186,12 +190,12 @@ class DownloadStats:
 @dataclass
 class DownloadState:
     """Persistent state for tracking download progress across restarts."""
-    years_completed: List[int] = field(default_factory=list)
-    current_year: Optional[int] = None
+    years_completed: list[int] = field(default_factory=list)
+    current_year: int | None = None
     total_downloaded_bytes: int = 0
     last_updated: str = ""
 
-    def save(self, path: Path):
+    def save(self, path: Path) -> None:
         """Save state to file."""
         self.last_updated = datetime.now().isoformat()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,14 +219,14 @@ class DownloadState:
                 logger.warning(f"Could not load state file: {e}")
         return cls()
 
-    def mark_year_complete(self, year: int):
+    def mark_year_complete(self, year: int) -> None:
         """Mark a year as fully completed."""
         if year not in self.years_completed:
             self.years_completed.append(year)
             self.years_completed.sort()
         self.current_year = None
 
-    def unmark_year_complete(self, year: int):
+    def unmark_year_complete(self, year: int) -> None:
         """Remove a year from completed list (for re-checking)."""
         if year in self.years_completed:
             self.years_completed.remove(year)
@@ -241,13 +245,13 @@ class ConcurrencyController:
         self._active = 0
         self._lock = Lock()
 
-    def acquire(self):
+    def acquire(self) -> None:
         """Acquire a download slot (blocks if at max concurrency)."""
         self._semaphore.acquire()
         with self._lock:
             self._active += 1
 
-    def release(self):
+    def release(self) -> None:
         """Release a download slot."""
         with self._lock:
             self._active -= 1
@@ -259,15 +263,15 @@ class ConcurrencyController:
         with self._lock:
             return self._active
 
-    def __enter__(self):
+    def __enter__(self) -> "ConcurrencyController":
         self.acquire()
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         self.release()
 
 
-def list_s3_objects(prefix: str, delimiter: str = "") -> Generator[dict, None, None]:
+def list_s3_objects(prefix: str, delimiter: str = "") -> Generator[dict[str, Any], None, None]:
     """
     List objects from NOAA's S3-style object store with pagination support.
 
@@ -304,7 +308,10 @@ def list_s3_objects(prefix: str, delimiter: str = "") -> Generator[dict, None, N
             except requests.exceptions.RequestException as e:
                 retry_count += 1
                 if retry_count >= MAX_DOWNLOAD_RETRIES:
-                    logger.error(f"Failed to list objects after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
+                    logger.error(
+                        f"Failed to list objects after "
+                        f"{MAX_DOWNLOAD_RETRIES} attempts: {e}"
+                    )
                     return
                 wait_time = 2 ** retry_count
                 logger.warning(f"Error listing objects: {e}. Retrying in {wait_time}s...")
@@ -345,7 +352,7 @@ def list_s3_objects(prefix: str, delimiter: str = "") -> Generator[dict, None, N
             break
 
 
-def get_available_years() -> List[int]:
+def get_available_years() -> list[int]:
     """Get list of available years in the GHCNh dataset."""
     years = []
     prefix = "hourly/access/by-year/"
@@ -363,7 +370,7 @@ def get_available_years() -> List[int]:
     return years
 
 
-def get_parquet_files_for_year(year: int, us_only: bool = True) -> List[dict]:
+def get_parquet_files_for_year(year: int, us_only: bool = True) -> list[dict[str, Any]]:
     """
     Get list of parquet files for a specific year.
 
@@ -440,7 +447,9 @@ def download_file(
                     # File exists but size mismatch, re-download
                     dest_path.unlink()
 
-                with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT, headers=headers) as response:
+                with requests.get(
+                    url, stream=True, timeout=DOWNLOAD_TIMEOUT, headers=headers
+                ) as response:
                     # Check for rate limiting
                     if response.status_code in RATE_LIMIT_CODES:
                         retry_count += 1
@@ -474,11 +483,14 @@ def download_file(
                     logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
+                    logger.error(
+                        f"Failed to download {url} after "
+                        f"{MAX_DOWNLOAD_RETRIES} attempts: {e}"
+                    )
                     stats.add_failure()
                     return False
 
-            except CONNECTION_RESET_ERRORS as e:
+            except CONNECTION_RESET_ERRORS:
                 # Connection was forcibly closed - common for long-running downloads
                 retry_count += 1
                 if dest_path.exists():
@@ -487,10 +499,16 @@ def download_file(
                 if retry_count < MAX_DOWNLOAD_RETRIES:
                     # Use longer backoff for connection resets
                     wait_time = backoff_base ** (retry_count + 1)
-                    logger.debug(f"Connection reset for {dest_path.name}, retrying in {wait_time}s...")
+                    logger.debug(
+                        f"Connection reset for {dest_path.name}, "
+                        f"retrying in {wait_time}s..."
+                    )
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} connection resets")
+                    logger.error(
+                        f"Failed to download {url} after "
+                        f"{MAX_DOWNLOAD_RETRIES} connection resets"
+                    )
                     stats.add_failure()
                     return False
 
@@ -504,7 +522,10 @@ def download_file(
                     logger.debug(f"Error downloading {url}: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"Failed to download {url} after {MAX_DOWNLOAD_RETRIES} attempts: {e}")
+                    logger.error(
+                        f"Failed to download {url} after "
+                        f"{MAX_DOWNLOAD_RETRIES} attempts: {e}"
+                    )
                     stats.add_failure()
                     return False
 
@@ -528,9 +549,9 @@ def download_year(
     us_only: bool = True,
     force: bool = False,
     max_workers: int = MAX_DOWNLOAD_THREADS,
-    state: Optional[DownloadState] = None,
-    concurrency: Optional[ConcurrencyController] = None,
-) -> Tuple[int, int]:
+    state: DownloadState | None = None,
+    concurrency: ConcurrencyController | None = None,
+) -> tuple[int, int]:
     """
     Download all parquet files for a specific year.
 
@@ -567,10 +588,14 @@ def download_year(
         stats.total_bytes += file_info["Size"]
 
         # Skip if file exists with correct size (unless force)
-        if not force and dest_path.exists():
-            if file_info["Size"] > 0 and dest_path.stat().st_size == file_info["Size"]:
-                stats.add_skip(file_info["Size"])
-                continue
+        if (
+            not force
+            and dest_path.exists()
+            and file_info["Size"] > 0
+            and dest_path.stat().st_size == file_info["Size"]
+        ):
+            stats.add_skip(file_info["Size"])
+            continue
 
         url = GHCNH_BASE_URL + file_info["Key"]
         tasks.append((url, dest_path, file_info["Size"], file_info["filename"]))
@@ -597,7 +622,9 @@ def download_year(
     failed_tasks = []
     failed_lock = Lock()
 
-    def do_download_pass(task_list: List[tuple], pass_name: str = ""):
+    def do_download_pass(
+        task_list: list[tuple[str, Path, int, str]], pass_name: str = ""
+    ) -> list[tuple[str, Path, int, str]]:
         """Execute a download pass and return failed tasks."""
         nonlocal stats
         pass_failed = []
@@ -624,7 +651,7 @@ def download_year(
                 failed=stats.failed_files,
             )
 
-            def update_progress():
+            def update_progress() -> None:
                 progress.update(
                     task_id,
                     speed=f"{concurrency.active}/{max_workers} | {stats.format_speed()}",
@@ -633,7 +660,9 @@ def download_year(
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_task = {
-                    executor.submit(download_file, url, path, size, stats, concurrency): (url, path, size, filename)
+                    executor.submit(
+                        download_file, url, path, size, stats, concurrency
+                    ): (url, path, size, filename)
                     for url, path, size, filename in task_list
                 }
 
@@ -696,7 +725,7 @@ def download_year(
     return successful, stats.failed_files
 
 
-def parse_year_filter(year_filter: str) -> List[int]:
+def parse_year_filter(year_filter: str) -> list[int]:
     """
     Parse a year filter string into a list of years.
 
@@ -706,7 +735,7 @@ def parse_year_filter(year_filter: str) -> List[int]:
         - Comma-separated: "2020,2022,2024"
         - Mixed: "2010:2015,2020,2024"
     """
-    years = set()
+    years: set[int] = set()
 
     for part in year_filter.split(","):
         part = part.strip()
@@ -719,7 +748,7 @@ def parse_year_filter(year_filter: str) -> List[int]:
     return sorted(years)
 
 
-def show_status():
+def show_status() -> None:
     """Show current download status from saved state."""
     state = DownloadState.load(STATE_FILE)
 
@@ -752,18 +781,18 @@ def show_status():
     print("=" * 60 + "\n")
 
 
-def show_inventory():
+def show_inventory() -> None:
     """Download and display station inventory from NOAA."""
     import csv
-    from io import StringIO
     from collections import Counter
+    from io import StringIO
 
     inventory_url = GHCNH_BASE_URL + "hourly/doc/ghcnh-station-list.csv"
 
     print("\n" + "=" * 60)
     print("GHCNh Station Inventory")
     print("=" * 60)
-    print(f"\nFetching station list from NOAA...")
+    print("\nFetching station list from NOAA...")
 
     try:
         response = requests.get(inventory_url, timeout=DOWNLOAD_TIMEOUT)
@@ -778,7 +807,7 @@ def show_inventory():
     reader = csv.DictReader(StringIO(content))
 
     # Count stations by country code (first 2 chars of station ID)
-    country_counts = Counter()
+    country_counts: Counter[str] = Counter()
     total_stations = 0
 
     for row in reader:
@@ -814,7 +843,12 @@ def show_inventory():
     print("\n" + "=" * 60 + "\n")
 
 
-def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, max_workers: int = MAX_DOWNLOAD_THREADS) -> dict:
+def audit_downloads(
+    years: list[int],
+    us_only: bool = True,
+    fix: bool = False,
+    max_workers: int = MAX_DOWNLOAD_THREADS,
+) -> dict[str, Any]:
     """
     Audit downloaded files against the server to find missing files.
 
@@ -826,7 +860,7 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
     Returns:
         Dictionary with audit results
     """
-    results = {
+    results: dict[str, Any] = {
         "years_checked": 0,
         "total_expected": 0,
         "total_found": 0,
@@ -871,7 +905,10 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
 
         # Report for this year
         if missing or size_mismatch:
-            logger.warning(f"Year {year}: {len(missing)} missing, {len(size_mismatch)} size mismatch")
+            logger.warning(
+                f"Year {year}: {len(missing)} missing, "
+                f"{len(size_mismatch)} size mismatch"
+            )
 
             if fix and (missing or size_mismatch):
                 # Download missing/mismatched files
@@ -891,7 +928,9 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
-                        executor.submit(download_file, url, path, size, stats, concurrency): filename
+                        executor.submit(
+                            download_file, url, path, size, stats, concurrency
+                        ): filename
                         for url, path, size, filename in tasks
                     }
 
@@ -914,7 +953,7 @@ def audit_downloads(years: List[int], us_only: bool = True, fix: bool = False, m
     return results
 
 
-def clean_downloads(years: List[int], us_only: bool = True, dry_run: bool = True) -> dict:
+def clean_downloads(years: list[int], us_only: bool = True, dry_run: bool = True) -> dict[str, Any]:
     """
     Clean downloaded files by removing corrupted files and files not matching the station filter.
 
@@ -926,7 +965,7 @@ def clean_downloads(years: List[int], us_only: bool = True, dry_run: bool = True
     Returns:
         Dictionary with clean results
     """
-    results = {
+    results: dict[str, Any] = {
         "years_checked": 0,
         "files_checked": 0,
         "corrupted_files": [],
@@ -996,7 +1035,7 @@ def clean_downloads(years: List[int], us_only: bool = True, dry_run: bool = True
     return results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download GHCNh parquet files from NOAA",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1017,7 +1056,10 @@ Examples:
     parser.add_argument(
         "--year", "-y",
         type=str,
-        help="Year(s) to download. Supports single year, ranges (2020:2024), or comma-separated (2020,2022)"
+        help=(
+            "Year(s) to download. Supports single year, ranges (2020:2024), "
+            "or comma-separated (2020,2022)"
+        ),
     )
     parser.add_argument(
         "--all-stations",
@@ -1118,7 +1160,10 @@ Examples:
         # Validate years
         invalid = [y for y in years_to_download if y not in available_years]
         if invalid:
-            logger.error(f"Invalid years: {invalid}. Available: {available_years[0]}-{available_years[-1]}")
+            logger.error(
+                f"Invalid years: {invalid}. "
+                f"Available: {available_years[0]}-{available_years[-1]}"
+            )
             return
     else:
         years_to_download = available_years
@@ -1146,21 +1191,21 @@ Examples:
         print(f"Size mismatch: {results['total_size_mismatch']}")
 
         if results['missing_files'] and not args.fix:
-            print(f"\nMissing files (first 20):")
+            print("\nMissing files (first 20):")
             for year, filename in results['missing_files'][:20]:
                 print(f"  {year}/{filename}")
             if len(results['missing_files']) > 20:
                 print(f"  ... and {len(results['missing_files']) - 20} more")
-            print(f"\nTo fix: python ghcnh_downloader.py --audit --fix")
+            print("\nTo fix: python ghcnh_downloader.py --audit --fix")
 
         if args.fix and (results['total_missing'] > 0 or results['total_size_mismatch'] > 0):
             total_to_fix = results['total_missing'] + results['total_size_mismatch']
-            print(f"\nFix results:")
+            print("\nFix results:")
             print(f"  Attempted: {total_to_fix}")
             print(f"  Successful: {results['fixed_success']}")
             print(f"  Failed: {results['fixed_failed']}")
             if results['fixed_failed'] > 0:
-                print(f"\nSome files failed to download. Run --audit --fix again to retry.")
+                print("\nSome files failed to download. Run --audit --fix again to retry.")
 
         print("=" * 60 + "\n")
         return
@@ -1169,7 +1214,10 @@ Examples:
     if args.clean:
         dry_run = not args.delete
         mode_str = "DRY RUN" if dry_run else "DELETING"
-        logger.info(f"Cleaning {len(years_to_download)} years ({station_type} stations) - {mode_str}...")
+        logger.info(
+            f"Cleaning {len(years_to_download)} years "
+            f"({station_type} stations) - {mode_str}..."
+        )
 
         results = clean_downloads(
             years_to_download,
@@ -1186,9 +1234,12 @@ Examples:
         print(f"Non-matching stations: {len(results['filtered_files'])}")
 
         if results['corrupted_files']:
-            print(f"\nCorrupted files (size mismatch):")
+            print("\nCorrupted files (size mismatch):")
             for year, filename, actual, expected in results['corrupted_files'][:10]:
-                print(f"  {year}/{filename}: {format_size(actual)} (expected {format_size(expected)})")
+                print(
+                    f"  {year}/{filename}: {format_size(actual)} "
+                    f"(expected {format_size(expected)})"
+                )
             if len(results['corrupted_files']) > 10:
                 print(f"  ... and {len(results['corrupted_files']) - 10} more")
 
@@ -1200,13 +1251,18 @@ Examples:
                 print(f"  ... and {len(results['filtered_files']) - 10} more")
 
         total_to_delete = len(results['corrupted_files']) + len(results['filtered_files'])
-        total_bytes = sum(f[2] for f in results['filtered_files']) + sum(f[2] for f in results['corrupted_files'])
+        total_bytes = sum(f[2] for f in results['filtered_files']) + sum(
+            f[2] for f in results['corrupted_files']
+        )
 
         if dry_run and total_to_delete > 0:
             print(f"\nWould delete {total_to_delete} files ({format_size(total_bytes)})")
-            print(f"To actually delete: python ghcnh_downloader.py --clean --delete")
+            print("To actually delete: python ghcnh_downloader.py --clean --delete")
         elif not dry_run and results['deleted_count'] > 0:
-            print(f"\nDeleted {results['deleted_count']} files ({format_size(results['deleted_bytes'])})")
+            print(
+                f"\nDeleted {results['deleted_count']} files "
+                f"({format_size(results['deleted_bytes'])})"
+            )
 
         print("=" * 60 + "\n")
         return
@@ -1261,7 +1317,9 @@ Examples:
     print(f"Failed: {total_failed}")
     print(f"Time elapsed: {elapsed:.1f}s")
     if elapsed > 0:
-        print(f"Average speed: {format_size(int((state.total_downloaded_bytes if state else 0) / elapsed))}/s")
+        downloaded_bytes = state.total_downloaded_bytes if state else 0
+        avg_speed = format_size(int(downloaded_bytes / elapsed))
+        print(f"Average speed: {avg_speed}/s")
     print(f"Output directory: {GHCNH_RAW_DIR}")
     print("=" * 60 + "\n")
 

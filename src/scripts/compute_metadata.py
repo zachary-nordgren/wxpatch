@@ -11,8 +11,6 @@ Usage:
 
 import json
 import logging
-from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -22,17 +20,17 @@ from weather_imputation.config.paths import METADATA_PARQUET, PROCESSED_DIR
 from weather_imputation.data.metadata import (
     compute_all_metadata,
     compute_all_metadata_incremental,
+    enrich_metadata_from_station_list,
     load_metadata,
     save_metadata,
-    enrich_metadata_from_station_list,
 )
-from weather_imputation.utils.parsing import parse_year_filter, parse_station_filter
+from weather_imputation.utils.parsing import parse_station_filter, parse_year_filter
 from weather_imputation.utils.progress import (
     create_processing_progress,
-    print_success,
-    print_warning,
     print_info,
+    print_success,
     print_summary_table,
+    print_warning,
 )
 
 app = typer.Typer(help="Compute station metadata from GHCNh parquet files.")
@@ -52,12 +50,12 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
 
 @app.command()
 def compute(
-    years: Optional[str] = typer.Option(
+    years: str | None = typer.Option(
         None,
         "--years", "-y",
         help="Year filter (e.g., '2020,2021' or '2010:2020')",
     ),
-    stations: Optional[str] = typer.Option(
+    stations: str | None = typer.Option(
         None,
         "--stations", "-s",
         help="Station filter (comma-separated station IDs)",
@@ -97,7 +95,8 @@ def compute(
     if year_filter:
         print_info(f"Year filter: {year_filter}")
     if station_filter:
-        print_info(f"Station filter: {station_filter[:5]}{'...' if len(station_filter) > 5 else ''}")
+        suffix = '...' if len(station_filter) > 5 else ''
+        print_info(f"Station filter: {station_filter[:5]}{suffix}")
 
     # Handle existing metadata
     if METADATA_PARQUET.exists() and not force and not incremental:
@@ -116,7 +115,12 @@ def compute(
             task_id = progress.add_task("Computing metadata", total=None)
 
             def progress_callback(current: int, total: int, station: str) -> None:
-                progress.update(task_id, total=total, completed=current, description=f"Processing {station}")
+                progress.update(
+                    task_id,
+                    total=total,
+                    completed=current,
+                    description=f"Processing {station}",
+                )
 
             metadata_df, updated_count, unchanged_count = compute_all_metadata_incremental(
                 year_filter=year_filter,
@@ -142,7 +146,10 @@ def compute(
 
         # Print summary
         no_hourly_count = (metadata_df["total_observation_count"] == 0).sum()
-        print_success(f"Updated metadata for {updated_count} stations ({unchanged_count} unchanged)")
+        print_success(
+            f"Updated metadata for {updated_count} stations "
+            f"({unchanged_count} unchanged)"
+        )
         print_summary_table("Metadata Summary", {
             "Stations updated": updated_count,
             "Stations unchanged": unchanged_count,
@@ -160,7 +167,12 @@ def compute(
             task_id = progress.add_task("Computing metadata", total=None)
 
             def progress_callback(current: int, total: int, station: str) -> None:
-                progress.update(task_id, total=total, completed=current, description=f"Processing {station}")
+                progress.update(
+                    task_id,
+                    total=total,
+                    completed=current,
+                    description=f"Processing {station}",
+                )
 
             metadata_df = compute_all_metadata(
                 year_filter=year_filter,
@@ -248,12 +260,17 @@ def stats() -> None:
         raise typer.Exit(1)
 
     # Compute statistics
-    stats_dict = {
+    avg_obs = float(metadata['total_observation_count'].mean())
+    total_obs = int(metadata['total_observation_count'].sum())
+    avg_temp = float(metadata['temperature_completeness_pct'].mean())
+    high_temp_count = int((metadata['temperature_completeness_pct'] > 90).sum())
+
+    stats_dict: dict[str, str | int] = {
         "Total stations": len(metadata),
-        "Avg observations per station": f"{metadata['total_observation_count'].mean():,.0f}",
-        "Total observations": f"{metadata['total_observation_count'].sum():,}",
-        "Avg temperature completeness": f"{metadata['temperature_completeness_pct'].mean():.1f}%",
-        "Stations with >90% temp coverage": f"{(metadata['temperature_completeness_pct'] > 90).sum()}",
+        "Avg observations per station": f"{avg_obs:,.0f}",
+        "Total observations": f"{total_obs:,}",
+        "Avg temperature completeness": f"{avg_temp:.1f}%",
+        "Stations with >90% temp coverage": f"{high_temp_count}",
     }
 
     print_summary_table("Metadata Statistics", stats_dict)

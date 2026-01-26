@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-# Get the project root (two levels up from this file: config -> weather_imputation -> src -> project)
+# Get the project root (two levels up from this file:
+# config -> weather_imputation -> src -> project)
 _THIS_FILE = Path(__file__).resolve()
 PROJECT_ROOT = _THIS_FILE.parent.parent.parent.parent
 

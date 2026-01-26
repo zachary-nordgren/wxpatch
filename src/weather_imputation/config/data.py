@@ -7,6 +7,7 @@ including station filtering, normalization, masking, and splitting strategies.
 from typing import Literal
 
 from pydantic import Field, field_validator
+from pydantic_core.core_schema import ValidationInfo
 
 from weather_imputation.config.base import BaseConfig
 
@@ -180,7 +181,7 @@ class MaskingConfig(BaseConfig):
 
     @field_validator("max_gap_length")
     @classmethod
-    def validate_gap_length(cls, v: int, info) -> int:
+    def validate_gap_length(cls, v: int, info: ValidationInfo) -> int:
         """Validate that max_gap_length >= min_gap_length.
 
         Args:
@@ -247,7 +248,7 @@ class SplitConfig(BaseConfig):
 
     @field_validator("test_ratio")
     @classmethod
-    def validate_ratio_sum(cls, v: float, info) -> float:
+    def validate_ratio_sum(cls, v: float, info: ValidationInfo) -> float:
         """Validate that train + val + test ratios sum to 1.0.
 
         Args:

@@ -1,7 +1,6 @@
 """Filesystem utilities for weather imputation."""
 
 import logging
-from pathlib import Path
 
 from weather_imputation.config.paths import (
     GHCNH_RAW_DIR,

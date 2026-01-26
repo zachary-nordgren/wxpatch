@@ -80,7 +80,7 @@ class MICEImputer(BaseImputer):
         if self.feature_columns is None:
             # Use all numeric columns
             numeric_cols = [
-                col for col, dtype in zip(df.columns, df.dtypes)
+                col for col, dtype in zip(df.columns, df.dtypes, strict=True)
                 if dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32]
             ]
             self._feature_columns = numeric_cols

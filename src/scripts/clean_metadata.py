@@ -10,36 +10,31 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from weather_imputation.config.paths import (
-    METADATA_PARQUET,
-    METADATA_CLEANED_PARQUET,
-    METADATA_CLEANED_CSV,
-    CLEANING_REPORT_JSON,
     CLEANING_LOG_TXT,
+    CLEANING_REPORT_JSON,
+    METADATA_CLEANED_CSV,
+    METADATA_CLEANED_PARQUET,
+    METADATA_PARQUET,
+)
+from weather_imputation.data.cleaning import (
+    CleaningLog,
+    identify_duplicate_stations,
+    run_cleaning_pipeline,
+    validate_coordinates,
 )
 from weather_imputation.data.metadata import load_metadata, save_metadata
-from weather_imputation.data.cleaning import (
-    identify_duplicate_stations,
-    merge_duplicate_stations,
-    lookup_missing_coordinates,
-    validate_coordinates,
-    clean_station_names,
-    run_cleaning_pipeline,
-    CleaningReport,
-    CleaningLog,
-)
 from weather_imputation.utils.progress import (
-    print_success,
-    print_warning,
-    print_info,
     print_error,
+    print_info,
+    print_success,
     print_summary_table,
+    print_warning,
     status_spinner,
 )
 
@@ -59,12 +54,12 @@ def setup_logging(verbose: bool = False) -> None:
 
 @app.command()
 def clean(
-    input_file: Optional[Path] = typer.Option(
+    input_file: Path | None = typer.Option(
         None,
         "--input", "-i",
         help="Input metadata parquet file",
     ),
-    output_file: Optional[Path] = typer.Option(
+    output_file: Path | None = typer.Option(
         None,
         "--output", "-o",
         help="Output cleaned metadata parquet file",
@@ -74,12 +69,12 @@ def clean(
         "--csv/--no-csv",
         help="Export cleaned metadata to CSV",
     ),
-    csv_output: Optional[Path] = typer.Option(
+    csv_output: Path | None = typer.Option(
         None,
         "--csv-path",
         help="Custom CSV output path (default: metadata_cleaned.csv)",
     ),
-    log_output: Optional[Path] = typer.Option(
+    log_output: Path | None = typer.Option(
         None,
         "--log",
         help="Path for detailed cleaning log (default: clean_log.txt)",
@@ -190,7 +185,7 @@ def clean(
 
 @app.command()
 def duplicates(
-    input_file: Optional[Path] = typer.Option(
+    input_file: Path | None = typer.Option(
         None,
         "--input", "-i",
         help="Input metadata parquet file",
@@ -247,12 +242,12 @@ def duplicates(
     if len(duplicates_df) > limit:
         console.print(f"\n[dim]Showing {limit} of {len(duplicates_df)} duplicates[/dim]")
 
-    console.print(f"\n[dim]Use 'clean --merge-duplicates' to merge these stations[/dim]")
+    console.print("\n[dim]Use 'clean --merge-duplicates' to merge these stations[/dim]")
 
 
 @app.command()
 def report(
-    report_file: Optional[Path] = typer.Option(
+    report_file: Path | None = typer.Option(
         None,
         "--file", "-f",
         help="Path to cleaning report JSON",
@@ -275,7 +270,7 @@ def report(
 
 @app.command()
 def validate(
-    input_file: Optional[Path] = typer.Option(
+    input_file: Path | None = typer.Option(
         None,
         "--input", "-i",
         help="Input metadata parquet file",

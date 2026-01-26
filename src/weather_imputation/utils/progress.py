@@ -1,11 +1,13 @@
 """Rich-based progress display utilities."""
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 from rich.console import Console
 from rich.progress import (
     BarColumn,
+    DownloadColumn,
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
@@ -13,7 +15,6 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
-    DownloadColumn,
     TransferSpeedColumn,
 )
 from rich.table import Table

@@ -81,11 +81,8 @@ def paired_t_test(
     # t-statistic
     t_stat = mean_diff / (std_diff / math.sqrt(n))
 
-    # Degrees of freedom
-    df = n - 1
-
     # TODO: Calculate p-value using t-distribution
-    # For now, use approximation for large n
+    # For now, use approximation for large n (degrees of freedom = n - 1)
     p_value = 2 * (1 - _normal_cdf(abs(t_stat))) if n > 30 else float("nan")
 
     # Cohen's d effect size
@@ -174,10 +171,7 @@ def diebold_mariano_test(
         )
 
     # Calculate loss differential
-    if loss_func == "squared":
-        d = (a ** 2) - (b ** 2)
-    else:  # absolute
-        d = a.abs() - b.abs()
+    d = (a ** 2) - (b ** 2) if loss_func == "squared" else a.abs() - b.abs()
 
     mean_d = d.mean()
     var_d = d.var()

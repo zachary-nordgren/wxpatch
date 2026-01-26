@@ -195,7 +195,7 @@ class SAITSConfig(ModelConfig):
     )
 
     @model_validator(mode="after")
-    def validate_d_model_divisible_by_n_heads(self):
+    def validate_d_model_divisible_by_n_heads(self) -> "SAITSConfig":
         """Validate that d_model is divisible by n_heads.
 
         Returns:
@@ -309,7 +309,7 @@ class CSDIConfig(ModelConfig):
     )
 
     @model_validator(mode="after")
-    def validate_d_model_and_beta(self):
+    def validate_d_model_and_beta(self) -> "CSDIConfig":
         """Validate d_model divisibility and beta range.
 
         Returns:

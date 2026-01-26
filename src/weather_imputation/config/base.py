@@ -5,7 +5,7 @@ offering common functionality for validation, serialization, and YAML/JSON loadi
 """
 
 from pathlib import Path
-from typing import Any, Dict, Type, TypeVar
+from typing import Any, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,7 +44,7 @@ class BaseConfig(BaseModel):
         populate_by_name=True,
     )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary.
 
         Returns:
@@ -83,7 +83,7 @@ class BaseConfig(BaseModel):
             f.write(self.model_dump_json(indent=2))
 
     @classmethod
-    def from_dict(cls: Type[T], data: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], data: dict[str, Any]) -> T:
         """Create configuration from dictionary.
 
         Args:
@@ -95,7 +95,7 @@ class BaseConfig(BaseModel):
         return cls.model_validate(data)
 
     @classmethod
-    def from_yaml(cls: Type[T], yaml_str: str) -> T:
+    def from_yaml(cls: type[T], yaml_str: str) -> T:
         """Create configuration from YAML string.
 
         Args:
@@ -108,7 +108,7 @@ class BaseConfig(BaseModel):
         return cls.from_dict(data)
 
     @classmethod
-    def from_yaml_file(cls: Type[T], path: Path | str) -> T:
+    def from_yaml_file(cls: type[T], path: Path | str) -> T:
         """Load configuration from YAML file.
 
         Args:
@@ -126,7 +126,7 @@ class BaseConfig(BaseModel):
             return cls.from_yaml(f.read())
 
     @classmethod
-    def from_json_file(cls: Type[T], path: Path | str) -> T:
+    def from_json_file(cls: type[T], path: Path | str) -> T:
         """Load configuration from JSON file.
 
         Args:

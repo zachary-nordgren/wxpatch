@@ -1,16 +1,20 @@
 """Main training loop for imputation models."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import polars as pl
 
 from weather_imputation.models.base import BaseImputer
 
 logger = logging.getLogger(__name__)
+
+# Type alias for callback function
+TrainingCallback = Callable[[str, dict[str, Any]], None]
 
 
 @dataclass
@@ -65,7 +69,7 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig | None = None,
-        callbacks: list[Callable] | None = None,
+        callbacks: list[TrainingCallback] | None = None,
     ):
         """Initialize the trainer.
 
@@ -106,10 +110,9 @@ class Trainer:
         train_metrics = self._evaluate(model, train_df, target_column)
 
         # Evaluate on validation data
-        if val_df is not None:
-            val_metrics = self._evaluate(model, val_df, target_column)
-        else:
-            val_metrics = {}
+        val_metrics = (
+            self._evaluate(model, val_df, target_column) if val_df is not None else {}
+        )
 
         elapsed = (datetime.now() - start_time).total_seconds()
 
@@ -170,7 +173,7 @@ class Trainer:
             List of TrainingResult for each fold
         """
         # TODO: Implement time-series aware cross-validation
-        results = []
+        results: list[TrainingResult] = []
         return results
 
     def get_results(self) -> list[TrainingResult]:

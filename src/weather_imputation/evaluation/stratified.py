@@ -26,7 +26,7 @@ class StratifiedResult:
     n_samples: int
     metrics: ImputationMetrics
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | int | float | None]:
         return {
             "group_name": self.group_name,
             "group_value": self.group_value,
