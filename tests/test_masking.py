@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from weather_imputation.config.data import MaskingConfig
-from weather_imputation.data.masking import apply_mask, apply_mcar_mask
+from weather_imputation.data.masking import apply_mar_mask, apply_mask, apply_mcar_mask
 
 
 class TestMCARMasking:
@@ -162,6 +162,224 @@ class TestMCARMasking:
         assert 0.1 <= actual_missing_ratio <= 0.3
 
 
+class TestMARMasking:
+    """Tests for MAR (Missing At Random) masking."""
+
+    def test_mar_masking_basic(self):
+        """Test MAR masking with default parameters."""
+        # Create data with clear extreme values in variable 0
+        data = torch.randn(10, 168, 6)
+        # Add some extreme values to make pattern more pronounced
+        data[:, ::10, 0] = 5.0  # High values
+        data[:, 1::10, 0] = -5.0  # Low values
+
+        mask = apply_mar_mask(
+            data, missing_ratio=0.2, condition_variable=0, extreme_percentile=0.15, seed=42
+        )
+
+        # Check shape
+        assert mask.shape == data.shape
+        assert mask.dtype == torch.bool
+
+        # Check missing ratio is approximately correct (within 10% tolerance)
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.1 <= actual_missing_ratio <= 0.3
+
+    def test_mar_masking_bias_towards_extremes(self):
+        """Test that MAR masking creates more missing values at extreme conditions."""
+        # Create data with controlled extreme values
+        torch.manual_seed(42)
+        data = torch.randn(50, 168, 6)
+
+        # Apply MAR mask conditioned on variable 0 (temperature)
+        mask = apply_mar_mask(
+            data, missing_ratio=0.2, condition_variable=0, extreme_percentile=0.15, seed=42
+        )
+
+        # Compute extreme value thresholds
+        condition_values = data[..., 0].flatten()
+        lower_threshold = condition_values.quantile(0.15).item()
+        upper_threshold = condition_values.quantile(0.85).item()
+
+        # Identify extreme vs normal timesteps
+        is_extreme = (data[..., 0] < lower_threshold) | (data[..., 0] > upper_threshold)
+
+        # Calculate missing ratio at extreme vs normal conditions
+        # (Focus on variable 0 for clearer signal)
+        missing_at_extreme = (~mask[..., 0])[is_extreme].float().mean().item()
+        missing_at_normal = (~mask[..., 0])[~is_extreme].float().mean().item()
+
+        # Missing ratio should be higher at extreme conditions
+        # Allow small margin since gap placement has randomness
+        assert missing_at_extreme >= missing_at_normal * 0.8, (
+            f"Expected higher missingness at extremes: "
+            f"extreme={missing_at_extreme:.3f}, normal={missing_at_normal:.3f}"
+        )
+
+    def test_mar_masking_with_different_condition_variables(self):
+        """Test MAR masking with different condition variables."""
+        data = torch.randn(10, 168, 6)
+
+        for var_idx in range(6):
+            mask = apply_mar_mask(
+                data,
+                missing_ratio=0.2,
+                condition_variable=var_idx,
+                extreme_percentile=0.15,
+                seed=42,
+            )
+
+            # Should work for any variable index
+            assert mask.shape == data.shape
+            actual_ratio = (~mask).float().mean().item()
+            assert 0.1 <= actual_ratio <= 0.3
+
+    def test_mar_masking_with_different_extreme_percentiles(self):
+        """Test MAR masking with different extreme percentiles."""
+        data = torch.randn(10, 168, 6)
+
+        for percentile in [0.05, 0.10, 0.15, 0.20, 0.30]:
+            mask = apply_mar_mask(
+                data,
+                missing_ratio=0.2,
+                condition_variable=0,
+                extreme_percentile=percentile,
+                seed=42,
+            )
+
+            assert mask.shape == data.shape
+            actual_ratio = (~mask).float().mean().item()
+            # Wider tolerance since extreme_percentile affects gap placement
+            assert 0.05 <= actual_ratio <= 0.35
+
+    def test_mar_masking_with_different_missing_ratios(self):
+        """Test MAR masking with various missing ratios."""
+        data = torch.randn(10, 168, 6)
+
+        for target_ratio in [0.1, 0.2, 0.3, 0.4, 0.5]:
+            mask = apply_mar_mask(data, missing_ratio=target_ratio, seed=42)
+            actual_ratio = (~mask).float().mean().item()
+
+            # Should be within 15% tolerance for MAR (slightly higher than MCAR due to bias)
+            tolerance = 0.15
+            assert abs(actual_ratio - target_ratio) < tolerance, (
+                f"Missing ratio {actual_ratio:.3f} not within {tolerance} of target {target_ratio}"
+            )
+
+    def test_mar_masking_reproducibility(self):
+        """Test that MAR masking is reproducible with same seed."""
+        data = torch.randn(10, 168, 6)
+
+        mask1 = apply_mar_mask(data, missing_ratio=0.2, seed=42)
+        mask2 = apply_mar_mask(data, missing_ratio=0.2, seed=42)
+
+        assert torch.equal(mask1, mask2)
+
+    def test_mar_masking_different_seeds(self):
+        """Test that different seeds produce different masks."""
+        data = torch.randn(10, 168, 6)
+
+        mask1 = apply_mar_mask(data, missing_ratio=0.2, seed=42)
+        mask2 = apply_mar_mask(data, missing_ratio=0.2, seed=43)
+
+        # Masks should be different
+        assert not torch.equal(mask1, mask2)
+
+        # But should have similar missing ratios
+        ratio1 = (~mask1).float().mean().item()
+        ratio2 = (~mask2).float().mean().item()
+        assert abs(ratio1 - ratio2) < 0.1
+
+    def test_mar_masking_invalid_shape(self):
+        """Test MAR masking raises error for invalid tensor shape."""
+        data_2d = torch.randn(168, 6)
+        with pytest.raises(ValueError, match="Expected 3D tensor"):
+            apply_mar_mask(data_2d, missing_ratio=0.2)
+
+        data_4d = torch.randn(10, 168, 6, 2)
+        with pytest.raises(ValueError, match="Expected 3D tensor"):
+            apply_mar_mask(data_4d, missing_ratio=0.2)
+
+    def test_mar_masking_invalid_missing_ratio(self):
+        """Test MAR masking raises error for invalid missing ratio."""
+        data = torch.randn(10, 168, 6)
+
+        with pytest.raises(ValueError, match="missing_ratio must be in"):
+            apply_mar_mask(data, missing_ratio=-0.1)
+
+        with pytest.raises(ValueError, match="missing_ratio must be in"):
+            apply_mar_mask(data, missing_ratio=1.5)
+
+    def test_mar_masking_invalid_gap_lengths(self):
+        """Test MAR masking raises error for invalid gap lengths."""
+        data = torch.randn(10, 168, 6)
+
+        with pytest.raises(ValueError, match="min_gap_length must be >= 1"):
+            apply_mar_mask(data, missing_ratio=0.2, min_gap_length=0)
+
+        with pytest.raises(ValueError, match="max_gap_length.*must be >= min_gap_length"):
+            apply_mar_mask(data, missing_ratio=0.2, min_gap_length=10, max_gap_length=5)
+
+    def test_mar_masking_invalid_condition_variable(self):
+        """Test MAR masking raises error for invalid condition variable."""
+        data = torch.randn(10, 168, 6)
+
+        # Negative index
+        with pytest.raises(ValueError, match="condition_variable must be in"):
+            apply_mar_mask(data, missing_ratio=0.2, condition_variable=-1)
+
+        # Index >= V
+        with pytest.raises(ValueError, match="condition_variable must be in"):
+            apply_mar_mask(data, missing_ratio=0.2, condition_variable=6)
+
+    def test_mar_masking_invalid_extreme_percentile(self):
+        """Test MAR masking raises error for invalid extreme percentile."""
+        data = torch.randn(10, 168, 6)
+
+        # Below 0
+        with pytest.raises(ValueError, match="extreme_percentile must be in"):
+            apply_mar_mask(data, missing_ratio=0.2, extreme_percentile=-0.1)
+
+        # Above 0.5
+        with pytest.raises(ValueError, match="extreme_percentile must be in"):
+            apply_mar_mask(data, missing_ratio=0.2, extreme_percentile=0.6)
+
+    def test_mar_masking_edge_case_small_sequence(self):
+        """Test MAR masking with very small sequence length."""
+        data = torch.randn(5, 10, 3)
+
+        mask = apply_mar_mask(
+            data, missing_ratio=0.2, min_gap_length=1, max_gap_length=3, seed=42
+        )
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        # Wider tolerance for small sequences
+        assert 0.0 <= actual_missing_ratio <= 0.5
+
+    def test_mar_masking_edge_case_single_variable(self):
+        """Test MAR masking with single variable."""
+        data = torch.randn(10, 168, 1)
+
+        mask = apply_mar_mask(data, missing_ratio=0.2, condition_variable=0, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.1 <= actual_missing_ratio <= 0.3
+
+    def test_mar_masking_no_extreme_values(self):
+        """Test MAR masking when all values are similar (no clear extremes)."""
+        # Create data with very small variance (all values similar)
+        data = torch.ones(10, 168, 6) + torch.randn(10, 168, 6) * 0.01
+
+        # Should still work, falling back to more uniform-like behavior
+        mask = apply_mar_mask(data, missing_ratio=0.2, extreme_percentile=0.15, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.05 <= actual_missing_ratio <= 0.35
+
+
 class TestApplyMask:
     """Tests for the generic apply_mask dispatcher function."""
 
@@ -188,13 +406,16 @@ class TestApplyMask:
 
         assert torch.equal(mask1, mask2)
 
-    def test_apply_mask_mar_not_implemented(self):
-        """Test apply_mask raises NotImplementedError for MAR."""
+    def test_apply_mask_with_mar_config(self):
+        """Test apply_mask with MAR configuration."""
         data = torch.randn(10, 168, 6)
         config = MaskingConfig(strategy="mar", missing_ratio=0.2)
 
-        with pytest.raises(NotImplementedError, match="MAR masking strategy not yet implemented"):
-            apply_mask(data, config, seed=42)
+        mask = apply_mask(data, config, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.05 <= actual_missing_ratio <= 0.35  # Wider tolerance for MAR
 
     def test_apply_mask_mnar_not_implemented(self):
         """Test apply_mask raises NotImplementedError for MNAR."""

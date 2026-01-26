@@ -81,10 +81,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Implemented MCAR masking with gap-based strategy, 17 tests passing. Added PyTorch and NumPy as dependencies.
 
 #### TASK-009: Create masking strategy for MAR (Missing At Random)
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_masking.py::test_mar_masking -v` passes
 - **Context:** `src/weather_imputation/data/masking.py`, `tests/test_masking.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Implemented MAR masking with bias towards extreme values (3x probability). All 15 tests passing.
 
 #### TASK-010: Create masking strategy for MNAR (Missing Not At Random)
 - **Status:** TODO

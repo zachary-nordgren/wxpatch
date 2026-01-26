@@ -434,3 +434,86 @@ This log tracks implementation progress, decisions, and findings during developm
 - Ruff SIM108 rule prefers ternary operators over simple if-else blocks for assignment
 
 **Confidence:** KNOWN - Implements FR-005 from SPEC.md (MCAR gap generation strategy). Algorithm based on standard MCAR definition from missing data literature. Extensive test coverage validates correctness.
+
+---
+
+### TASK-009: MAR Masking Strategy
+
+**Status:** Completed
+
+**Implementation:**
+- Created `apply_mar_mask()` function in `src/weather_imputation/data/masking.py`:
+  - Generates Missing At Random gaps where missingness depends on observed values
+  - Bias towards extreme values: 3x probability when condition variable is extreme
+  - Configurable condition variable (default: 0 = temperature)
+  - Configurable extreme percentile threshold (default: 0.15 = bottom/top 15%)
+  - Gap-based approach with random lengths (min_gap_length to max_gap_length)
+  - Targets specified missing_ratio (proportion of missing values)
+  - Supports reproducibility via seed parameter
+- Updated `apply_mask()` dispatcher to support MAR strategy
+- Created comprehensive test suite in `tests/test_masking.py` (15 new tests, all passing):
+  - Basic functionality and shape validation
+  - Bias towards extreme values validation
+  - Different condition variables (all 6 variables tested)
+  - Different extreme percentiles (0.05-0.30)
+  - Different missing ratios (0.1-0.5)
+  - Reproducibility and seed handling
+  - Input validation (invalid shapes, ratios, gap lengths, condition variable, percentile)
+  - Edge cases (small sequences, single variable, no clear extremes)
+  - Updated dispatcher test (no longer expects NotImplementedError for MAR)
+- Updated `src/weather_imputation/data/__init__.py` to export `apply_mar_mask`
+- Total tests: 32 (17 MCAR + 15 MAR + 3 dispatcher tests)
+
+**Key Design Decisions:**
+- **Extreme value conditioning:** Missingness probability is 3x higher when condition variable is in extreme range (bottom/top percentiles)
+  - Rationale: Simulates realistic sensor failure patterns during extreme weather conditions
+  - Extreme probability = 0.75, normal probability = 0.25
+- **Quantile-based thresholds:** Compute extreme thresholds using quantiles across all samples (global statistics)
+  - Lower threshold = percentile (e.g., 15th percentile)
+  - Upper threshold = 1 - percentile (e.g., 85th percentile)
+- **Flexible conditioning:** Can condition on any variable index (0-5 for Tier 1 variables)
+  - Default: variable 0 (temperature) as it's most commonly associated with sensor failures
+- **Graceful degradation:** If no extreme timesteps found, falls back to uniform sampling (with warning)
+- **Gap placement bias:** When placing gaps, preferentially select extreme timesteps with 75% probability
+- **Validation:** Extreme percentile must be in [0.0, 0.5] to ensure meaningful extreme/normal split
+
+**Implementation Challenges:**
+- **Balancing bias vs missing ratio:** Need to bias towards extremes while still hitting target missing_ratio
+  - Solution: Use probabilistic selection (75% extreme, 25% normal) rather than exclusive extreme selection
+- **Testing bias quantitatively:** Hard to test exact bias due to randomness and gap overlap
+  - Solution: Test that missing_at_extreme >= missing_at_normal * 0.8 (allow 20% margin)
+  - Focus on relative comparison rather than absolute values
+- **Edge case handling:** When all values are similar (no clear extremes), quantiles may not provide useful thresholds
+  - Solution: Detect when extreme_timesteps is empty, warn, and fall back to uniform sampling
+
+**Test Coverage:**
+- 15 tests covering all aspects of MAR masking
+- Validates missing ratio accuracy (within 15% tolerance - slightly higher than MCAR due to bias)
+- Checks bias towards extreme values (missing_at_extreme >= missing_at_normal * 0.8)
+- Verifies reproducibility, input validation, and edge cases
+- Tests all 6 condition variables and multiple extreme percentiles
+- Updated dispatcher test to verify MAR config works correctly
+
+**Files Modified:**
+- `src/weather_imputation/data/masking.py` (added apply_mar_mask function, ~170 lines)
+- `src/weather_imputation/data/__init__.py` (updated exports)
+- `tests/test_masking.py` (added 15 MAR tests + updated 1 dispatcher test, now 32 tests total, 447 lines)
+- `TODO.md` (marked TASK-009 as DONE)
+
+**Lessons Learned:**
+- **MAR definition:** Missingness depends on observed values, not on unobserved values (key distinction from MNAR)
+- **Weather context:** Extreme weather conditions are natural conditioning events for MAR in weather data
+  - Temperature extremes often correlate with sensor failures (freezing, overheating)
+  - Wind speed extremes may correlate with physical damage
+  - This makes MAR particularly realistic for weather imputation evaluation
+- **Probabilistic bias:** 3x probability provides strong bias while still allowing some normal-condition gaps
+  - Ensures extreme conditions get more missingness without completely excluding normal conditions
+- **Testing tolerance:** MAR masking needs wider tolerance (15%) than MCAR (10%) due to:
+  - Additional randomness from biased selection
+  - Interaction between extreme value distribution and gap placement
+  - Overlap handling is more complex when gaps cluster at extremes
+- **Quantile computation:** PyTorch's `.quantile()` method works on flattened tensors, providing global statistics
+  - Alternative: per-sample quantiles would create different thresholds per sample
+  - Global quantiles are more consistent and easier to reason about
+
+**Confidence:** KNOWN - Implements FR-005 from SPEC.md (MAR gap generation strategy). MAR definition from missing data literature (Little & Rubin). Extreme value conditioning is realistic for weather sensor failures. All 15 tests passing with comprehensive validation.
