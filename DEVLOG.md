@@ -4,6 +4,64 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-25 - Data Pipeline: Train/Val/Test Splitting (v0.3.2)
+
+### TASK-013: Strategy D Train/Val/Test Splitting
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/data/splits.py` with 4 splitting strategies:
+  - **Spatial Split**: Randomly assigns complete stations to train/val/test sets
+  - **Temporal Split**: Splits by time (earliest→train, middle→val, latest→test)
+  - **Hybrid Split**: Combines spatial and temporal with configurable weight
+  - **Simulated Split (Strategy D)**: All stations in all splits, differentiation via masking
+- Created temporal mask utilities:
+  - `create_temporal_mask()`: Divides time series into train/val/test segments
+  - `split_by_temporal_mask()`: Extracts train/val/test portions from data tensors
+- Created `create_split()` dispatcher function with strategy selection
+- Created comprehensive test suite: 39 tests covering all functionality
+- All tests passing, ruff checks passing
+
+**Key Design Decisions:**
+- **Strategy D (simulated) as default**: Matches SAITS/CSDI training methodology from research papers
+- Strategy D returns all stations for all splits; actual differentiation happens during Dataset creation with synthetic masking
+- Ratios in Strategy D control temporal proportions but all data is used with different masks
+- Temporal masks create contiguous segments (train→val→test) for interpretability
+- Spatial split uses random shuffling with seed control for reproducibility
+- Temporal split requires first_observation/last_observation metadata columns
+- Hybrid split uses spatial_weight parameter (0.0=all temporal, 1.0=all spatial)
+
+**Implementation Challenges:**
+- Initial hybrid split ratio calculation included unused `adjusted_test` variable (removed)
+- Balancing flexibility (4 strategies) with simplicity (consistent interface)
+- Documenting Strategy D rationale (why all stations in all splits)
+
+**Test Coverage:**
+- Spatial split: basic functionality, no overlap, reproducibility, different seeds, invalid ratios, empty metadata
+- Temporal split: basic functionality, missing columns, invalid ratios
+- Hybrid split: basic, spatial_weight variations (0.0, 1.0), invalid spatial_weight/ratios
+- Simulated split (Strategy D): all stations included, invalid ratios, empty metadata, different ratios
+- create_split dispatcher: all strategies, unknown strategy, default strategy
+- Temporal mask: basic creation, proportions, contiguous segments, invalid ratios/length, small length
+- split_by_temporal_mask: 2D/3D data, preserves values, unknown split, shape incompatibility, 1D raises
+- Integration: complete Strategy D workflow, all strategies produce valid splits
+
+**Lessons Learned:**
+- Strategy D (simulated masks) maximizes data utilization and avoids distribution shift
+- Research papers (SAITS, CSDI) use this approach for controlled imputation evaluation
+- Temporal masks provide clean separation for time series splits
+- Providing multiple strategies offers flexibility for different experimental designs
+- Clear documentation essential for explaining why Strategy D returns duplicate station lists
+
+**Confidence:** KNOWN - Implements FR-006 from SPEC.md (train/val/test splits with Strategy D preferred). Matches methodology from SAITS/CSDI papers for simulated masking-based splits.
+
+**References:**
+- [SAITS: Self-Attention-based Imputation for Time Series](https://arxiv.org/abs/2202.08516)
+- [Unveiling the Secrets: How Masking Strategies Shape Time Series Imputation](https://arxiv.org/html/2405.17508v1)
+
+---
+
 ## 2026-01-25 - Data Pipeline: Normalization (v0.3.1)
 
 ### TASK-012: Per-Variable Normalization Utilities

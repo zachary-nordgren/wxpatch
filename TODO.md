@@ -105,10 +105,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Created Normalizer class with zscore, minmax, and none normalization methods. Handles missing values gracefully (only normalizes observed values). Added 23 comprehensive tests covering fit/transform/inverse_transform, edge cases (constant variables, mostly missing data), and reproducibility. All tests passing. CONFIDENCE: KNOWN - Implements FR-007 from SPEC.md (per-variable normalization).
 
 #### TASK-013: Implement Strategy D train/val/test splitting
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_splits.py::test_strategy_d_split -v` passes
 - **Context:** `src/weather_imputation/data/splits.py`, `tests/test_splits.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Implemented all 4 splitting strategies (spatial, temporal, hybrid, simulated). Strategy D (simulated) returns all stations for all splits, with actual differentiation happening via synthetic masking during training. Created 39 comprehensive tests, all passing. Includes temporal mask utilities for splitting time series data. CONFIDENCE: KNOWN - Implements FR-006 from SPEC.md and matches SAITS/CSDI training methodology.
 
 #### TASK-014: Create PyTorch Dataset for time series windows
 - **Status:** TODO
