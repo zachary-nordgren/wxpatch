@@ -131,10 +131,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Created Imputer Protocol and BaseImputer base class with 28 comprehensive tests (all passing). Implements SPEC.md section 6.2 API contract using PyTorch tensors.
 
 #### TASK-017: Implement linear interpolation baseline
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_models.py::test_linear_interpolation -v` passes
 - **Context:** `src/weather_imputation/models/classical/linear.py`, `tests/test_models.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented LinearInterpolationImputer with 25 comprehensive tests (all passing). Supports max_gap_length parameter to limit interpolation to short gaps. Uses PyTorch tensors conforming to new Imputer protocol. Handles edge cases: leading/trailing missing values, all observed/missing, multiple variables/samples. Ruff checks passing.
 
 #### TASK-018: Implement Akima spline interpolation
 - **Status:** TODO

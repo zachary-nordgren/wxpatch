@@ -4,6 +4,73 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Linear Interpolation Baseline Implementation (v0.3.6)
+
+### TASK-017: Implement Linear Interpolation Baseline
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/models/classical/linear.py` to conform to new Imputer protocol
+- Uses PyTorch tensors (N, T, V) instead of legacy Polars DataFrames
+- Implements time-based linear interpolation with gap-based strategy
+- Created comprehensive test suite: 25 tests in `tests/test_models.py` (all passing)
+- Ruff checks passing
+
+**Key Design Decisions:**
+- **Gap interpolation**: Draws straight lines between nearest observed values on either side
+- **max_gap_length parameter**: Optional limit on gap size to interpolate (in timesteps)
+  - If None (default), all gaps are filled regardless of size
+  - If specified, only gaps ≤ max_gap_length are interpolated
+- **Boundary handling**:
+  - Leading missing values: forward-filled from first observed value
+  - Trailing missing values: backward-filled from last observed value
+- **Independent processing**: Each sample and variable processed independently
+- **Edge case handling**: All observed → no-op, all missing → zeros
+- **Deterministic**: No randomness, fully reproducible
+
+**Implementation Details:**
+- `fit()`: No-op for linear interpolation (non-parametric method)
+- `impute()`: Main method that processes each (sample, variable) pair via `_interpolate_1d()`
+- `_interpolate_1d()`: Core interpolation logic for single time series
+  - Identifies observed indices
+  - Iterates through gaps
+  - Generates interpolated values using `torch.linspace` for weights
+  - Fills boundary values via forward/backward fill
+- `save()/load()`: Saves hyperparameters (max_gap_length) as JSON + metadata as PyTorch checkpoint
+
+**Test Coverage:**
+- Initialization: basic, with max_gap_length
+- Protocol compliance: isinstance(Imputer)
+- Fit/fitted state: before/after fit, raises before fit
+- Interpolation correctness: simple gap, multiple gaps, leading/trailing missing, all observed/missing
+- Multiple dimensions: multiple variables, multiple samples in batch
+- max_gap_length: respected, exact boundary
+- Save/load: metadata persistence, roundtrip imputation
+- Input validation: wrong types, dimensions, shape mismatch, mask dtype
+- Edge cases: single timestep, single variable
+- Reproducibility: deterministic results
+
+**Lessons Learned:**
+- Linear interpolation is simple but effective baseline for short gaps in continuous variables
+- Gap-based approach more realistic than point-wise masking
+- PyTorch tensor operations enable clean, vectorized implementation
+- `torch.linspace` provides natural way to generate interpolation weights
+- Forward/backward fill for boundaries is standard approach (alternative: extrapolation)
+- max_gap_length parameter useful for comparing methods at different gap lengths
+
+**Implementation Challenges:**
+- None - straightforward implementation once Imputer protocol was established
+- Legacy Polars API required complete rewrite, but new PyTorch API is cleaner
+
+**Confidence:** KNOWN - Implements standard linear interpolation for time series. Algorithm is deterministic and well-tested. Conforms to Imputer protocol from SPEC.md section 6.2.
+
+**Next Steps:**
+- TASK-018: Implement Akima spline interpolation
+- TASK-019: Implement MICE imputation
+
+---
+
 ## 2026-01-26 - BaseImputer Protocol Implementation (v0.3.5)
 
 ### TASK-016: Implement BaseImputer Protocol
