@@ -217,10 +217,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 ### Utilities
 
 #### TASK-029: Implement circular statistics for wind direction
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_circular.py::test_wind_direction_encoding -v` passes
 - **Context:** `src/weather_imputation/utils/circular.py`, `tests/test_circular.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented comprehensive circular statistics module with sin/cos encoding, circular mean/std, angular difference computation. All 38 tests passing. Ruff checks passing. CONFIDENCE: KNOWN - Implements FR-009 from SPEC.md (circular wind encoding for SAITS/CSDI).
 
 #### TASK-030: Implement reproducibility utilities (seed management)
 - **Status:** TODO

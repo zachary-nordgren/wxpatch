@@ -1411,3 +1411,146 @@ Created interactive Marimo notebook for analyzing missing data patterns in GHCNh
 - Uses existing masking functions from `src/weather_imputation/data/masking.py` (TASK-008 through TASK-011)
 - Leverages loader functions from `src/weather_imputation/data/ghcnh_loader.py` (TASK-006, TASK-007)
 - Requires metadata from `compute_metadata.py` and `clean_metadata.py`
+
+---
+
+## 2026-01-26 - Circular Statistics for Wind Direction (v0.3.13)
+
+### TASK-029: Implement Circular Statistics for Wind Direction
+
+**Status:** Completed
+
+**Implementation:**
+Created comprehensive circular statistics utilities for handling wind direction as a circular variable (0° = 360°). Wind direction requires special mathematical treatment due to its circular nature, which differs from linear variables like temperature.
+
+**Module Structure (`src/weather_imputation/utils/circular.py`):**
+
+1. **Coordinate Conversion:**
+   - `degrees_to_radians()`: Convert wind direction from degrees to radians
+   - `radians_to_degrees()`: Convert back with normalization to [0, 360)
+
+2. **Wind Direction Encoding (Primary Feature):**
+   - `encode_wind_direction()`: Converts degrees to (sin θ, cos θ) Cartesian pairs
+     - Continuous at 0°/360° boundary (critical for neural networks)
+     - Maintains unit circle representation
+     - Supports multidimensional tensors (preserves shape except last dim → 2)
+   - `decode_wind_direction()`: Reconstructs degrees from (sin, cos) encoding
+     - Uses atan2 for proper quadrant handling
+     - Returns values in [0, 360) range
+
+3. **Circular Statistics:**
+   - `circular_mean()`: Computes mean of circular data via unit vector averaging
+     - Handles 0°/360° boundary correctly
+     - Supports masking for missing values
+     - Works with multidimensional tensors (computes along last dimension)
+   - `circular_std()`: Circular standard deviation using mean resultant length
+     - Formula: σ = sqrt(-2 * ln(R)) where R is mean resultant length
+     - Low values indicate concentrated directions
+     - High values indicate dispersed/uniform directions
+   - `angular_difference()`: Shortest angular distance between two directions
+     - Returns signed difference in [-180°, +180°]
+     - Positive = clockwise, negative = counterclockwise
+     - Correctly handles wraparound at 0°/360°
+
+**Test Coverage (`tests/test_circular.py`):**
+- 38 comprehensive tests across 5 test classes
+- All tests passing with strict tolerances (rtol=1e-5, atol=1e-7)
+
+**Test Organization:**
+1. **TestDegreesRadiansConversion** (4 tests):
+   - Cardinal direction conversions
+   - Round-trip conversions
+   - Normalization to [0, 360)
+
+2. **TestWindDirectionEncoding** (9 tests):
+   - Cardinal direction encoding/decoding
+   - Multidimensional tensor handling
+   - Boundary continuity at 0°/360°
+   - Round-trip encoding → decoding
+   - Error handling for invalid inputs
+   - Random angle robustness
+
+3. **TestCircularMean** (8 tests):
+   - Identical directions (mean = value)
+   - Cardinal and intercardinal directions
+   - Cross-zero boundary handling
+   - Opposite directions (undefined case)
+   - Masking support
+   - Multidimensional computation
+   - dtype preservation
+
+4. **TestCircularStd** (7 tests):
+   - Concentrated directions (low std)
+   - Dispersed directions (high std)
+   - Opposite directions (maximum dispersion)
+   - Masking support
+   - Multidimensional computation
+   - dtype preservation
+
+5. **TestAngularDifference** (10 tests):
+   - Clockwise/counterclockwise differences
+   - Cross-zero boundary handling
+   - Opposite directions (±180°)
+   - Broadcasting support
+   - Range validation [-180°, 180°]
+   - dtype preservation
+
+**Technical Decisions:**
+- **CONFIDENCE: KNOWN** - Sin/cos encoding per SPEC.md Section 8 ("Wind Direction Encoding: Sin/cos components")
+- Uses PyTorch tensors for consistency with rest of codebase
+- All functions preserve tensor dtype (float32/float64)
+- Broadcasting semantics match PyTorch conventions
+- Error messages provide clear context for debugging
+
+**Implementation Notes:**
+- Encoding method parameter currently only supports "sincos" (matches SPEC assumption)
+- Von Mises distribution support deferred (noted in SPEC as possible future enhancement for CSDI)
+- Circular std uses radians for output (standard in directional statistics literature)
+- All functions handle edge cases: all missing, single value, opposite directions
+
+**References:**
+- Mardia, K. V., & Jupp, P. E. (2000). *Directional Statistics*. Wiley.
+- Fisher, N. I. (1993). *Statistical Analysis of Circular Data*. Cambridge University Press.
+
+**Usage Example:**
+```python
+import torch
+from weather_imputation.utils.circular import encode_wind_direction, decode_wind_direction
+
+# Encode wind directions for neural network input
+degrees = torch.tensor([0.0, 90.0, 180.0, 270.0])  # N, E, S, W
+encoded = encode_wind_direction(degrees)
+# Shape: (4, 2) - [(0,1), (1,0), (0,-1), (-1,0)]
+
+# Decode back to degrees
+reconstructed = decode_wind_direction(encoded)
+# tensor([0., 90., 180., 270.])
+```
+
+**Validation Results:**
+- ✓ All 38 tests passing
+- ✓ Ruff linting passed (no errors)
+- ✓ Type hints complete (compatible with mypy --strict)
+- ✓ Exported in `src/weather_imputation/utils/__init__.py`
+
+**Integration Points:**
+- Will be used by SAITS model (TASK-042: Add wind direction encoding to SAITS)
+- May be used by CSDI model for von Mises conditioning (deferred to Phase 3)
+- Required for proper wind direction normalization in preprocessing (TASK-031)
+- Supports downstream wind analysis in evaluation
+
+**Files Modified:**
+- Created: `src/weather_imputation/utils/circular.py` (217 lines)
+- Created: `tests/test_circular.py` (372 lines)
+- Updated: `src/weather_imputation/utils/__init__.py` (added exports)
+- Updated: `TODO.md` (TASK-029 marked DONE)
+- Updated: `DEVLOG.md` (this entry)
+
+**Dependencies:**
+- PyTorch (already in project dependencies)
+- Python math module (standard library)
+
+**Next Steps:**
+- TASK-030: Implement reproducibility utilities (seed management)
+- TASK-042: Integrate circular encoding into SAITS model
+- Consider adding von Mises distribution support if CSDI requires it (Phase 3)
