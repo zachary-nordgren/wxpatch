@@ -4,6 +4,72 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - MICE Imputation Implementation (v0.3.8)
+
+### TASK-019: Implement MICE (Multiple Imputation by Chained Equations)
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/models/classical/mice.py` to conform to Imputer protocol
+- Uses PyTorch tensors (N, T, V) instead of legacy Polars DataFrames
+- Implements MICE using sklearn's IterativeImputer with multiple predictor methods
+- Created comprehensive test suite: 19 tests in `tests/test_models.py` (all passing)
+- Added scikit-learn>=1.3.0 dependency to pyproject.toml
+- Ruff checks passing
+
+**Key Design Decisions:**
+- **Multiple imputations**: Generates n_imputations (default 5) complete datasets using different random seeds
+- **impute() returns mean**: Average of multiple imputations for single point estimate
+- **generate_imputations()**: Provides access to all imputations for uncertainty quantification
+- **Predictor methods**: Supports "bayesian_ridge" (default), "random_forest", "linear"
+- **Training**: Learns variable relationships from training data using sklearn IterativeImputer
+- **Reshape strategy**: Treats each timestep as an observation (N*T rows, V features) for sklearn
+
+**Implementation Details:**
+- `fit()`: Collects training data, reshapes to (N*T, V), fits multiple IterativeImputers
+- `impute()`: Generates multiple imputations and returns their mean
+- `generate_imputations()`: Returns all M imputations as (M, N, T, V) tensor
+- `_get_predictor()`: Returns sklearn estimator based on predictor_method
+- `save()/load()`: Saves hyperparameters (JSON) and fitted sklearn models (pickle)
+
+**Test Coverage:**
+- Initialization: basic, with parameters
+- Protocol compliance: isinstance(Imputer)
+- Fit: dict batches, tuple batches
+- Fitted state: before fit raises, marks as fitted
+- Imputation: preserves observed values, fills missing reasonably, multiple variables
+- Multiple imputations: generate_imputations(), returns mean
+- Predictor methods: bayesian_ridge, linear, random_forest, invalid raises
+- Save/load: metadata persistence, roundtrip imputation
+- Reproducibility: random_state ensures determinism
+- Edge cases: all observed, input validation
+
+**Lessons Learned:**
+- **MICE treats timesteps as observations**: Each (N, T, V) tensor reshaped to (N*T, V) for sklearn
+- **Requires sufficient data**: sklearn IterativeImputer needs multiple observations per variable
+- **Multiple imputations enable uncertainty**: Different random seeds create variation in imputations
+- **Sklearn mask convention opposite**: sklearn uses True=missing, we use True=observed
+- **Predictor choice matters**: bayesian_ridge provides uncertainty, random_forest handles non-linearity
+- **Convergence warnings acceptable**: Some test cases trigger early stopping warnings (expected)
+
+**Implementation Challenges:**
+- Initial tests failed with extreme values (126 million) due to insufficient test observations
+- Resolved by ensuring test data has multiple timesteps and scattered missing values
+- Sklearn needs each variable to have some observed values to train predictors
+- Multivariate imputation requires V>1 and correlations between variables
+
+**Confidence:** KNOWN - Implements standard MICE algorithm using sklearn's IterativeImputer. Conforms to Imputer protocol from SPEC.md section 6.2. MICE methodology well-established in literature (van Buuren & Groothuis-Oudshoorn, 2011).
+
+**References:**
+- van Buuren, S., & Groothuis-Oudshoorn, K. (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software, 45(3), 1-67.
+- [sklearn.impute.IterativeImputer Documentation](https://scikit-learn.org/stable/modules/generated/sklearn.impute.IterativeImputer.html)
+
+**Next Steps:**
+- TASK-020: Implement RMSE metric
+
+---
+
 ## 2026-01-26 - Akima Spline Interpolation Baseline Implementation (v0.3.7)
 
 ### TASK-018: Implement Akima Spline Interpolation

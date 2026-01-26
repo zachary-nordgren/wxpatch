@@ -143,10 +143,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Implemented AkimaSplineImputer using scipy.interpolate.Akima1DInterpolator. Created 24 comprehensive tests (all passing). Added scipy>=1.10.0 dependency. Ruff checks passing. Uses PyTorch tensors conforming to Imputer protocol. Includes linear fallback for edge cases.
 
 #### TASK-019: Implement MICE (Multiple Imputation by Chained Equations)
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_models.py::test_mice_imputation -v` passes
 - **Context:** `src/weather_imputation/models/classical/mice.py`, `tests/test_models.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented MICEImputer with sklearn IterativeImputer. Supports 3 predictor methods (bayesian_ridge, random_forest, linear). Generates multiple imputations for uncertainty quantification. All 19 tests passing. Added scikit-learn>=1.3.0 dependency.
 
 ### Evaluation Framework
 
