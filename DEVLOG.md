@@ -4,6 +4,101 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Stratified Evaluation Implementation (v0.3.10)
+
+### TASK-024 through TASK-026: Stratified Evaluation
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/evaluation/stratified.py` to use PyTorch tensors
+- Replaced legacy Polars DataFrames with PyTorch tensor API matching metrics.py conventions
+- Implemented 4 stratification types:
+  1. **Gap length stratification**: Bins evaluation positions by gap duration
+  2. **Variable stratification**: Per-variable metrics (e.g., temperature vs pressure)
+  3. **Extreme value stratification**: Low/normal/high percentile-based groups
+  4. **Seasonal stratification**: Meteorological season-based groups (winter/spring/summer/fall)
+- Created convenience function `compute_stratified_metrics()` for all-in-one computation
+- Created comprehensive test suite: 24 tests in `tests/test_stratified.py` (all passing)
+- Ruff checks passing
+
+**Key Design Decisions:**
+- **Tensor shapes**: (N, T, V) = (samples, timesteps, variables) convention from SPEC.md
+- **Mask convention**: True=evaluate, False=ignore (consistent with metrics.py)
+- **Dictionary output**: Nested dicts mapping stratum name → metrics dict
+- **Gap length bins**: Default [6, 24, 72, 168] hours (6h, 1d, 3d, 1w)
+- **Extreme percentiles**: Default (5, 95) for 5th and 95th percentiles
+- **Season mapping**: Meteorological seasons (DJF, MAM, JJA, SON)
+
+**API Contract:**
+```python
+def stratify_by_gap_length(
+    y_true: Tensor, y_pred: Tensor, mask: Tensor, gap_lengths: Tensor,
+    bins: list[int] | None = None
+) -> dict[str, dict[str, float]]
+
+def stratify_by_variable(
+    y_true: Tensor, y_pred: Tensor, mask: Tensor,
+    variable_names: list[str] | None = None
+) -> dict[str, dict[str, float]]
+
+def stratify_by_extreme_values(
+    y_true: Tensor, y_pred: Tensor, mask: Tensor,
+    percentiles: tuple[float, float] = (5.0, 95.0)
+) -> dict[str, dict[str, float]]
+
+def stratify_by_season(
+    y_true: Tensor, y_pred: Tensor, mask: Tensor, timestamps: Tensor
+) -> dict[str, dict[str, float]]
+
+def compute_stratified_metrics(
+    y_true: Tensor, y_pred: Tensor, mask: Tensor, ...
+) -> dict[str, dict[str, dict[str, float]]]
+```
+
+**Implementation Details:**
+- **Gap length**: Groups positions by gap duration, computes metrics per bin
+- **Variable**: Creates separate mask for each variable dimension, independent metrics
+- **Extremes**: Computes quantiles from ground truth, splits into 3 groups
+- **Season**: Extracts month from Unix timestamps, maps to meteorological seasons
+- **Convenience function**: Validates inputs, calls individual functions, returns nested dict
+
+**Test Coverage:**
+- Gap length (4 tests): default bins, custom bins, empty bins, shape validation
+- Variable (4 tests): default names, custom names, partial mask, name validation
+- Extremes (4 tests): default percentiles, custom percentiles, empty mask, invalid percentiles
+- Season (3 tests): all seasons, single season, timestamp shape validation
+- Convenience function (3 tests): all stratifications, selective, missing inputs
+- Edge cases (4 tests): shape validation for all functions
+- Integration (1 test): realistic scenario with all stratifications
+
+**Lessons Learned:**
+- **PyTorch boolean masking**: Combining masks with `&` enables flexible stratification
+- **Timestamp handling**: PyTorch lacks datetime ops, requires numpy conversion
+- **Nested dictionaries**: Clean API for hierarchical results (stratification → stratum → metrics)
+- **Empty strata handling**: Skip strata with no evaluation positions (return empty)
+- **Quantile vs percentile**: torch.quantile expects 0-1 range, not 0-100
+- **Season edge case**: December wraps to next year, needs special handling in season mapping
+
+**Implementation Challenges:**
+- **Legacy Polars API**: Complete rewrite required to match new tensor-based API
+- **Datetime conversion**: NumPy timestamps (float32) need int conversion for datetime.fromtimestamp()
+- **Test flakiness**: Fixed test that expected timestamps ValueError but got gap_lengths ValueError first
+
+**Confidence:** KNOWN - Implements FR-013 from SPEC.md (stratified analysis by gap length, season, variable, extremes). Uses standard statistical stratification techniques. PyTorch tensor operations are deterministic and well-tested. Conforms to metrics.py API conventions.
+
+**References:**
+- SPEC.md Section 3.4 (Data Model), Section 2.1 (FR-013)
+- Stratified sampling: [Wikipedia](https://en.wikipedia.org/wiki/Stratified_sampling)
+- Meteorological seasons: [NOAA](https://www.ncei.noaa.gov/access/monitoring/dyk/seasons)
+
+**Next Steps:**
+- TASK-027: Create station exploration notebook with filtering UI
+- TASK-028: Create gap analysis notebook
+- TASK-029: Implement circular statistics for wind direction
+
+---
+
 ## 2026-01-26 - Point Metrics Implementation (v0.3.9)
 
 ### TASK-020 through TASK-023: Point Evaluation Metrics

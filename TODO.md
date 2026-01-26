@@ -175,10 +175,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26 alongside TASK-020. Implemented as part of comprehensive metrics module.
 
 #### TASK-024: Implement gap-length stratified evaluation
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_stratified.py::test_gap_length_stratification -v` passes
 - **Context:** `src/weather_imputation/evaluation/stratified.py`, `tests/test_stratified.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Completely rewrote stratified.py to use PyTorch tensors. Implemented 4 stratification types (gap length, variable, extremes, season) + convenience function. All 24 tests passing. Ruff checks passing. CONFIDENCE: KNOWN - Implements FR-013 from SPEC.md (stratified analysis).
 
 #### TASK-025: Implement seasonal stratified evaluation
 - **Status:** TODO
