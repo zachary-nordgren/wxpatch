@@ -181,24 +181,24 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Completely rewrote stratified.py to use PyTorch tensors. Implemented 4 stratification types (gap length, variable, extremes, season) + convenience function. All 24 tests passing. Ruff checks passing. CONFIDENCE: KNOWN - Implements FR-013 from SPEC.md (stratified analysis).
 
 #### TASK-025: Implement seasonal stratified evaluation
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_stratified.py::test_seasonal_stratification -v` passes
 - **Context:** `src/weather_imputation/evaluation/stratified.py`, `tests/test_stratified.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26 as part of TASK-024. Implemented `stratify_by_season()` with meteorological season grouping. 3 tests passing.
 
 #### TASK-026: Implement per-variable evaluation
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_stratified.py::test_per_variable_evaluation -v` passes
 - **Context:** `src/weather_imputation/evaluation/stratified.py`, `tests/test_stratified.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26 as part of TASK-024. Implemented `stratify_by_variable()` for per-variable metrics. 4 tests passing.
 
 ### Marimo Notebooks
 
 #### TASK-027: Create station exploration notebook with filtering UI
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `marimo edit notebooks/01_station_exploration.py` opens without errors and displays interactive controls
 - **Context:** `notebooks/01_station_exploration.py`, `src/weather_imputation/data/ghcnh_loader.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Notebook existed from v0.2.4 but had variable name conflicts and linting issues. Fixed marimo validation errors (variable 'output' in multiple cells), removed unused variables, fixed import sorting, resolved line length issues. All marimo check and ruff validation passing. Notebook includes: filtering controls (temp completeness, min years, min observations, coord validation), distribution histograms, geographic map with folium, K-means clustering with configurable features, cluster visualizations, and CSV export functionality.
 
 #### TASK-028: Create gap analysis notebook
 - **Status:** TODO

@@ -4,6 +4,71 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Station Exploration Notebook Validation (v0.3.11)
+
+### TASK-027: Create Station Exploration Notebook with Filtering UI
+
+**Status:** Completed
+
+**Implementation:**
+- Validated existing notebook from v0.2.4 (created 2026-01-20)
+- Fixed Marimo validation errors (variable name conflicts)
+- Resolved ruff linting issues (unused variables, import sorting, line length)
+- Installed notebook dependencies (marimo, plotly, folium, pandas)
+- Verified notebook loads metadata successfully (7,772 stations)
+
+**Fixes Applied:**
+- Changed `output` to `_output` in `cluster_visualization` and `display_cluster_stats` cells (Marimo requires unique variable names across cells)
+- Removed unused variables: `source`, `n_stations`, `n_cols`, `columns_preview`
+- Fixed import sorting (marimo check requirement)
+- Split long error message line (>100 chars)
+- Changed bare expressions to return statements for Marimo best practices
+
+**Validation Results:**
+- ✓ Python syntax validation passed
+- ✓ All imports work correctly
+- ✓ Metadata loads successfully (cleaned metadata with 7,772 stations)
+- ✓ Marimo check passed (no structural issues)
+- ✓ Ruff linting passed (all checks passed)
+
+**Notebook Features:**
+1. **Interactive Filtering Controls:**
+   - Temperature completeness slider (0-100%)
+   - Min time span slider (1-30 years)
+   - Min observations slider (0-100k)
+   - Valid coordinates checkbox
+2. **Visualizations:**
+   - Temperature completeness histogram
+   - Observation count histogram
+   - Interactive geographic map with folium (MarkerCluster for performance)
+   - Station clustering with K-means (2-15 clusters)
+   - Geographic cluster visualization with plotly
+3. **Clustering Analysis:**
+   - Configurable features (lat/lon, temp completeness, obs count, temp stats)
+   - Cluster statistics table (station count, averages, centroids)
+4. **Export:**
+   - Export filtered stations to CSV
+
+**Implementation Challenges:**
+- Marimo requires unique variable names across all cells (unlike Jupyter where cell scope is isolated)
+- Windows console Unicode issues (checkmark character encoding errors)
+- Polars DataFrame truthiness check raises TypeError (must use `is not None` and `is_empty()`)
+
+**Lessons Learned:**
+- Marimo's reactive execution model requires different patterns than Jupyter
+- Private variables (underscore prefix) are cell-scoped and don't need to be unique
+- Marimo check command catches structural issues before runtime
+- Notebook dependencies should be in optional dependency group
+- Return statements preferred over bare expressions for cell output
+
+**Confidence:** KNOWN - Implements FR-017 from SPEC.md (interactive station filtering notebook). Marimo notebook validated with official tooling. All dependencies installed and tested.
+
+**Next Steps:**
+- TASK-028: Create gap analysis notebook
+- TASK-029: Implement circular statistics for wind direction
+
+---
+
 ## 2026-01-26 - Stratified Evaluation Implementation (v0.3.10)
 
 ### TASK-024 through TASK-026: Stratified Evaluation

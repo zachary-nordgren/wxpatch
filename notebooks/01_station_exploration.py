@@ -28,18 +28,19 @@ app = marimo.App(width="medium")
 @app.cell
 def imports():
     """Import required libraries."""
-    import marimo as mo
-    import polars as pl
-    import plotly.express as px
-    import folium
-    from folium.plugins import MarkerCluster
-    from pathlib import Path
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
     import json
 
     # Project imports - add src to path
     import sys
+    from pathlib import Path
+
+    import folium
+    import marimo as mo
+    import plotly.express as px
+    import polars as pl
+    from folium.plugins import MarkerCluster
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root / "src"))
 
@@ -79,11 +80,9 @@ def load_data(load_metadata, mo):
 
     # Try cleaned first, fall back to raw
     metadata = load_metadata(cleaned=True)
-    source = "cleaned"
 
     if metadata is None:
         metadata = load_metadata(cleaned=False)
-        source = "raw"
 
     if metadata is None:
         mo.stop(
@@ -91,10 +90,6 @@ def load_data(load_metadata, mo):
             mo.md("**Error**: No metadata file found. Run `compute_metadata.py` first.")
         )
 
-    # Get column info
-    n_stations = len(metadata)
-    n_cols = len(metadata.columns)
-    columns_preview = ", ".join(metadata.columns[:8]) + "..."
     return (metadata,)
 
 
@@ -354,7 +349,10 @@ def perform_clustering(
             cluster_data = filtered.select(select_cols).drop_nulls()
 
             if len(cluster_data) < n_clusters.value:
-                cluster_error = f"Not enough valid data points ({len(cluster_data)}) after removing nulls"
+                cluster_error = (
+                    f"Not enough valid data points ({len(cluster_data)}) "
+                    "after removing nulls"
+                )
             else:
                 X = cluster_data.select(available_features).to_numpy()
 
@@ -413,16 +411,16 @@ def show_clustering_status(
 @app.cell
 def cluster_visualization(clustered_full, mo, pl, px):
     """Visualize clusters on map."""
-    output = None
+    _output = None
 
     if clustered_full is None or "cluster" not in clustered_full.columns:
-        output = mo.md("*No clustering results to display*")
+        _output = mo.md("*No clustering results to display*")
     else:
         # Scatter plot of clusters
         df_pd = clustered_full.filter(pl.col("cluster").is_not_null()).to_pandas()
 
         if len(df_pd) == 0:
-            output = mo.md("*No clustering results to display*")
+            _output = mo.md("*No clustering results to display*")
         else:
             cluster_fig = px.scatter_geo(
                 df_pd,
@@ -443,10 +441,9 @@ def cluster_visualization(clustered_full, mo, pl, px):
                 showcountries=True,
                 countrycolor="white",
             )
-            output = cluster_fig
+            _output = cluster_fig
 
-    output
-    return
+    return _output
 
 
 @app.cell
@@ -483,15 +480,14 @@ def display_cluster_stats(cluster_stats_df, mo, pl):
             pl.col("centroid_lat").round(2),
             pl.col("centroid_lon").round(2),
         ])
-        output = mo.vstack([
+        _output = mo.vstack([
             mo.md("### Cluster Statistics"),
             mo.ui.table(display_df.to_pandas()),
         ])
     else:
-        output = mo.md("*No cluster statistics available*")
+        _output = mo.md("*No cluster statistics available*")
 
-    output
-    return
+    return _output
 
 
 @app.cell
