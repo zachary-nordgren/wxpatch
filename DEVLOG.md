@@ -300,6 +300,56 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+### TASK-011: Realistic Gap Generator
+
+**Status:** Completed
+
+**Implementation:**
+- Created `apply_realistic_mask()` in `src/weather_imputation/data/masking.py`
+- Generates realistic gap patterns based on observed GHCNh data characteristics
+- Two gap distribution modes:
+  - **Empirical**: Based on observed patterns (50% short, 40% medium, 10% long)
+  - **Log-normal**: Heavy-tailed distribution with mean=1.0, std=1.5
+- Gap categories:
+  - Short (1-6 hours): Sensor noise, brief outages
+  - Medium (6-72 hours): Maintenance, temporary failures
+  - Long (72-336 hours): Equipment failures, extended outages
+- Added 13 comprehensive tests (now 63 tests total in test_masking.py)
+
+**Key Design Decisions:**
+- Gap distribution parameters derived from GHCNh metadata analysis:
+  - Median gap: ~1 hour (brief interruptions)
+  - 75th percentile: ~13 hours (short outages)
+  - Long tail: gaps up to 100+ days (equipment failures)
+- Empirical distribution chosen as default (more interpretable than log-normal)
+- Maximum gap length capped at 336 hours (2 weeks) for log-normal mode
+- Same gap-based approach as other masking strategies (no point-wise masking)
+
+**Implementation Challenges:**
+- Balancing realistic gap distribution with target missing ratio
+- Empirical distribution test required analyzing gap patterns from mask
+- High missing ratios (>0.4) harder to achieve due to gap overlap
+
+**Lessons Learned:**
+- Real-world gap patterns are heavily skewed: most gaps short, few very long
+- Three-tier categorization (short/medium/long) simplifies distribution modeling
+- Log-normal distribution provides alternative for sensitivity analysis
+- Gap analysis in tests valuable for validating distribution properties
+
+**Test Coverage:**
+- Basic functionality and shape validation
+- Gap distribution verification (empirical and log-normal modes)
+- Different missing ratios (0.1-0.4)
+- Reproducibility and seed handling
+- Input validation and error messages
+- Edge cases: small sequences, single variable
+- Comparison with MCAR (different gap patterns)
+- Integration with `apply_mask()` dispatcher
+
+**Confidence:** INFERRED - Gap distribution parameters based on empirical GHCNh metadata statistics. Distribution categories (50/40/10 split) are reasonable approximations of observed patterns but not exact fits.
+
+---
+
 ## 2026-01-20 - Parallel Metadata Computation & Schema Refactoring (v0.2.5-0.2.6)
 
 ### Multi-threaded Station Processing

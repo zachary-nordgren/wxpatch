@@ -510,6 +510,155 @@ def apply_mnar_mask(
     return mask
 
 
+def apply_realistic_mask(
+    data: torch.Tensor,
+    missing_ratio: float = 0.2,
+    gap_distribution: str = "empirical",
+    seed: int | None = None,
+) -> torch.Tensor:
+    """Apply realistic gap pattern masking based on observed data characteristics.
+
+    Generates gaps that mimic real-world sensor failures by sampling gap lengths
+    from a realistic distribution. The distribution includes:
+    - Short gaps (1-6 hours): Common noise, brief outages (~50% of gaps)
+    - Medium gaps (6-72 hours): Maintenance, temporary failures (~40% of gaps)
+    - Long gaps (72+ hours): Equipment failures, extended outages (~10% of gaps)
+
+    This distribution is based on observed gap patterns in the GHCNh dataset where:
+    - Median gap: ~1 hour (brief interruptions)
+    - 75th percentile: ~13 hours (short outages)
+    - Long tail: gaps up to 100+ days (equipment failures)
+
+    Args:
+        data: Input tensor of shape (N, T, V) where N=samples, T=timesteps, V=variables
+        missing_ratio: Target proportion of missing values (0.0-1.0)
+        gap_distribution: Gap length distribution type:
+            - "empirical": Use observed gap distribution from GHCNh data (default)
+            - "lognormal": Log-normal distribution (heavy tail for long gaps)
+        seed: Random seed for reproducibility (None = non-deterministic)
+
+    Returns:
+        Boolean mask tensor of shape (N, T, V) where True=observed, False=missing
+
+    Raises:
+        ValueError: If data is not 3D, missing_ratio not in [0, 1], or
+                   gap_distribution not supported
+
+    Example:
+        >>> data = torch.randn(32, 168, 6)  # 32 samples, 1 week, 6 variables
+        >>> mask = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+        >>> # Gaps will have realistic distribution: mostly short, some medium, few long
+    """
+    # Input validation
+    if data.ndim != 3:
+        raise ValueError(f"Expected 3D tensor (N, T, V), got shape {data.shape}")
+    if not 0.0 <= missing_ratio <= 1.0:
+        raise ValueError(f"missing_ratio must be in [0, 1], got {missing_ratio}")
+    if gap_distribution not in ["empirical", "lognormal"]:
+        raise ValueError(
+            f"gap_distribution must be 'empirical' or 'lognormal', got {gap_distribution}"
+        )
+
+    N, T, V = data.shape
+
+    # Set random seed if provided
+    rng = np.random.RandomState(seed) if seed is not None else np.random.RandomState()
+
+    # Initialize mask as all observed (True)
+    mask = torch.ones_like(data, dtype=torch.bool)
+
+    # Calculate target number of missing values (timesteps × variables per sample)
+    target_missing = int(missing_ratio * T * V)
+
+    # Define gap length distribution based on empirical GHCNh data
+    # Based on metadata analysis:
+    # - 50% short gaps (1-6 hours): sensor noise, brief outages
+    # - 40% medium gaps (6-72 hours): maintenance, temporary failures
+    # - 10% long gaps (72+ hours): equipment failures
+    if gap_distribution == "empirical":
+        gap_categories = ["short", "medium", "long"]
+        gap_probabilities = [0.5, 0.4, 0.1]
+        gap_ranges = {
+            "short": (1, 6),  # 1-6 hours
+            "medium": (6, 72),  # 6-72 hours
+            "long": (72, 336),  # 72-336 hours (3-14 days)
+        }
+    else:  # lognormal
+        # Log-normal distribution parameters (fit to empirical data)
+        # Mean log gap length ≈ 1.0 (exp(1.0) ≈ 2.7 hours)
+        # Std log gap length ≈ 1.5 (creates heavy tail)
+        lognormal_mean = 1.0
+        lognormal_std = 1.5
+
+    # Generate gaps for each sample independently
+    for sample_idx in range(N):
+        current_missing = 0
+        max_iterations = target_missing * 20  # Safety limit
+        iterations = 0
+
+        while current_missing < target_missing and iterations < max_iterations:
+            # Randomly select variable
+            var_idx = rng.randint(0, V)
+
+            # Find an observed position (to avoid overlap)
+            max_attempts = 50 if missing_ratio > 0.5 else 10
+            found_observed = False
+            for _ in range(max_attempts):
+                start_idx = rng.randint(0, T)
+                if mask[sample_idx, start_idx, var_idx]:
+                    found_observed = True
+                    break
+
+            if not found_observed:
+                # If we couldn't find observed position, we're likely near target
+                break
+
+            # Sample gap length from realistic distribution
+            if gap_distribution == "empirical":
+                # Sample category based on probabilities
+                category = rng.choice(gap_categories, p=gap_probabilities)
+                min_len, max_len = gap_ranges[category]
+                gap_length = rng.randint(min_len, max_len + 1)
+            else:  # lognormal
+                # Sample from log-normal distribution and round to integer
+                log_gap_length = rng.normal(lognormal_mean, lognormal_std)
+                gap_length = max(1, int(np.exp(log_gap_length)))
+                # Clip to reasonable maximum (2 weeks = 336 hours)
+                gap_length = min(gap_length, 336)
+
+            # Limit gap length to not overshoot target by more than 50%
+            remaining = target_missing - current_missing
+            if gap_length > remaining * 1.5:
+                gap_length = max(1, int(remaining))
+
+            # Calculate end position (clip to sequence length)
+            end_idx = min(start_idx + gap_length, T)
+
+            # Count how many NEW missing values this gap would create
+            new_missing = mask[sample_idx, start_idx:end_idx, var_idx].sum().item()
+
+            # Apply gap (set mask to False for missing values)
+            mask[sample_idx, start_idx:end_idx, var_idx] = False
+
+            current_missing += new_missing
+            iterations += 1
+
+        if iterations >= max_iterations:
+            logger.debug(
+                f"Sample {sample_idx}: Hit max iterations ({max_iterations}) "
+                f"with {current_missing}/{target_missing} missing values"
+            )
+
+    # Log actual missing ratio
+    actual_missing_ratio = (~mask).float().mean().item()
+    logger.info(
+        f"Applied realistic mask: target={missing_ratio:.3f}, actual={actual_missing_ratio:.3f}, "
+        f"distribution={gap_distribution}"
+    )
+
+    return mask
+
+
 def apply_mask(
     data: torch.Tensor,
     config: MaskingConfig,
@@ -561,6 +710,10 @@ def apply_mask(
             seed=seed,
         )
     elif config.strategy == "realistic":
-        raise NotImplementedError("Realistic masking strategy not yet implemented")
+        return apply_realistic_mask(
+            data,
+            missing_ratio=config.missing_ratio,
+            seed=seed,
+        )
     else:
         raise ValueError(f"Unknown masking strategy: {config.strategy}")

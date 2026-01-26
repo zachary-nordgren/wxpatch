@@ -93,10 +93,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Implemented MNAR masking where missingness depends on unobserved values themselves (extreme values 5x more likely to be missing by default). Added 18 comprehensive tests covering bias verification, parameter validation, edge cases, and MNAR vs MAR comparison. All 50 masking tests passing. CONFIDENCE: KNOWN - Implements FR-005 from SPEC.md (MNAR gap generation).
 
 #### TASK-011: Create realistic gap generator based on observed patterns
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_masking.py::test_realistic_gap_generator -v` passes
 - **Context:** `src/weather_imputation/data/masking.py`, `tests/test_masking.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Implemented `apply_realistic_mask()` with empirical and log-normal gap distributions. Gap distribution based on GHCNh metadata analysis: 50% short (1-6h), 40% medium (6-72h), 10% long (72-336h) gaps. All 13 new tests passing, 63 total masking tests passing. CONFIDENCE: INFERRED - Gap distribution parameters based on empirical GHCNh data analysis.
 
 #### TASK-012: Implement per-variable normalization utilities
 - **Status:** TODO

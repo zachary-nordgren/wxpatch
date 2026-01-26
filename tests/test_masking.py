@@ -1,5 +1,6 @@
 """Tests for masking strategies."""
 
+import numpy as np
 import pytest
 import torch
 
@@ -9,6 +10,7 @@ from weather_imputation.data.masking import (
     apply_mask,
     apply_mcar_mask,
     apply_mnar_mask,
+    apply_realistic_mask,
 )
 
 
@@ -746,12 +748,209 @@ class TestApplyMask:
         actual_missing_ratio = (~mask).float().mean().item()
         assert 0.05 <= actual_missing_ratio <= 0.35  # Wider tolerance for MNAR
 
-    def test_apply_mask_realistic_not_implemented(self):
-        """Test apply_mask raises NotImplementedError for realistic."""
+    def test_apply_mask_with_realistic_config(self):
+        """Test apply_mask with realistic configuration."""
         data = torch.randn(10, 168, 6)
         config = MaskingConfig(strategy="realistic", missing_ratio=0.2)
 
-        with pytest.raises(
-            NotImplementedError, match="Realistic masking strategy not yet implemented"
-        ):
-            apply_mask(data, config, seed=42)
+        mask = apply_mask(data, config, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.15 <= actual_missing_ratio <= 0.25
+
+
+class TestRealisticMasking:
+    """Tests for realistic gap pattern masking."""
+
+    def test_realistic_masking_basic(self):
+        """Test realistic masking with default parameters."""
+        data = torch.randn(10, 168, 6)  # 10 samples, 168 hours, 6 variables
+        mask = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        # Check shape
+        assert mask.shape == data.shape
+        assert mask.dtype == torch.bool
+
+        # Check missing ratio is approximately correct (within 5% tolerance)
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.15 <= actual_missing_ratio <= 0.25
+
+    def test_realistic_masking_gap_distribution_empirical(self):
+        """Test realistic masking uses empirical gap distribution."""
+        data = torch.randn(50, 336, 6)  # 50 samples, 2 weeks, 6 variables
+        mask = apply_realistic_mask(
+            data, missing_ratio=0.2, gap_distribution="empirical", seed=42
+        )
+
+        # Analyze gap lengths to verify distribution is realistic
+        # Most gaps should be short (1-6 hours), some medium (6-72), few long (72+)
+        gaps_found = []
+        for sample_idx in range(mask.shape[0]):
+            for var_idx in range(mask.shape[2]):
+                # Find gaps (contiguous False values)
+                missing_seq = ~mask[sample_idx, :, var_idx]
+                in_gap = False
+                gap_start = 0
+
+                for t in range(missing_seq.shape[0]):
+                    if missing_seq[t] and not in_gap:
+                        # Start of new gap
+                        in_gap = True
+                        gap_start = t
+                    elif not missing_seq[t] and in_gap:
+                        # End of gap
+                        gap_length = t - gap_start
+                        gaps_found.append(gap_length)
+                        in_gap = False
+
+                # Handle gap at end of sequence
+                if in_gap:
+                    gap_length = missing_seq.shape[0] - gap_start
+                    gaps_found.append(gap_length)
+
+        # Verify gap distribution properties
+        assert len(gaps_found) > 0, "Should have at least some gaps"
+
+        gaps_array = np.array(gaps_found)
+        short_gaps = (gaps_array >= 1) & (gaps_array <= 6)
+        medium_gaps = (gaps_array > 6) & (gaps_array <= 72)
+        long_gaps = gaps_array > 72
+
+        short_pct = short_gaps.sum() / len(gaps_found)
+        medium_pct = medium_gaps.sum() / len(gaps_found)
+        long_pct = long_gaps.sum() / len(gaps_found)
+
+        # Expected: ~50% short, ~40% medium, ~10% long
+        # Allow generous tolerance due to randomness
+        assert short_pct >= 0.3, f"Expected ≥30% short gaps, got {short_pct:.2%}"
+        assert medium_pct >= 0.2, f"Expected ≥20% medium gaps, got {medium_pct:.2%}"
+        # Long gaps might be 0 if sequence is short, so we just check it's not too high
+        assert long_pct <= 0.3, f"Expected ≤30% long gaps, got {long_pct:.2%}"
+
+    def test_realistic_masking_gap_distribution_lognormal(self):
+        """Test realistic masking with log-normal gap distribution."""
+        data = torch.randn(20, 168, 6)
+        mask = apply_realistic_mask(
+            data, missing_ratio=0.2, gap_distribution="lognormal", seed=42
+        )
+
+        # Check shape and missing ratio
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.15 <= actual_missing_ratio <= 0.25
+
+    def test_realistic_masking_with_different_missing_ratios(self):
+        """Test realistic masking with various missing ratios."""
+        data = torch.randn(10, 168, 6)
+
+        for target_ratio in [0.1, 0.2, 0.3, 0.4]:
+            mask = apply_realistic_mask(data, missing_ratio=target_ratio, seed=42)
+            actual_ratio = (~mask).float().mean().item()
+
+            # Should be within 10% of target for realistic ratios
+            tolerance = 0.1
+            assert abs(actual_ratio - target_ratio) < tolerance, (
+                f"Missing ratio {actual_ratio:.3f} not within {tolerance} of target {target_ratio}"
+            )
+
+    def test_realistic_masking_reproducibility(self):
+        """Test that realistic masking is reproducible with same seed."""
+        data = torch.randn(10, 168, 6)
+
+        mask1 = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+        mask2 = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        assert torch.equal(mask1, mask2)
+
+    def test_realistic_masking_different_seeds(self):
+        """Test that different seeds produce different masks."""
+        data = torch.randn(10, 168, 6)
+
+        mask1 = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+        mask2 = apply_realistic_mask(data, missing_ratio=0.2, seed=43)
+
+        # Masks should be different
+        assert not torch.equal(mask1, mask2)
+
+        # But should have similar missing ratios
+        ratio1 = (~mask1).float().mean().item()
+        ratio2 = (~mask2).float().mean().item()
+        assert abs(ratio1 - ratio2) < 0.1
+
+    def test_realistic_masking_invalid_shape(self):
+        """Test realistic masking raises error for invalid tensor shape."""
+        data_2d = torch.randn(168, 6)
+        with pytest.raises(ValueError, match="Expected 3D tensor"):
+            apply_realistic_mask(data_2d, missing_ratio=0.2)
+
+        data_4d = torch.randn(10, 168, 6, 2)
+        with pytest.raises(ValueError, match="Expected 3D tensor"):
+            apply_realistic_mask(data_4d, missing_ratio=0.2)
+
+    def test_realistic_masking_invalid_missing_ratio(self):
+        """Test realistic masking raises error for invalid missing ratio."""
+        data = torch.randn(10, 168, 6)
+
+        with pytest.raises(ValueError, match="missing_ratio must be in"):
+            apply_realistic_mask(data, missing_ratio=-0.1)
+
+        with pytest.raises(ValueError, match="missing_ratio must be in"):
+            apply_realistic_mask(data, missing_ratio=1.5)
+
+    def test_realistic_masking_invalid_gap_distribution(self):
+        """Test realistic masking raises error for invalid gap distribution."""
+        data = torch.randn(10, 168, 6)
+
+        with pytest.raises(ValueError, match="gap_distribution must be"):
+            apply_realistic_mask(data, missing_ratio=0.2, gap_distribution="invalid")
+
+    def test_realistic_masking_no_mutation(self):
+        """Test that realistic masking doesn't modify input data."""
+        data = torch.randn(10, 168, 6)
+        data_copy = data.clone()
+
+        _ = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        # Original data should be unchanged
+        assert torch.equal(data, data_copy)
+
+    def test_realistic_masking_edge_case_small_sequence(self):
+        """Test realistic masking on small sequences."""
+        data = torch.randn(5, 24, 3)  # Small: 5 samples, 24 hours, 3 variables
+        mask = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        # Wider tolerance for small sequences
+        assert 0.0 <= actual_missing_ratio <= 0.4
+
+    def test_realistic_masking_edge_case_single_variable(self):
+        """Test realistic masking with single variable."""
+        data = torch.randn(10, 168, 1)  # Single variable
+        mask = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        assert mask.shape == data.shape
+        actual_missing_ratio = (~mask).float().mean().item()
+        assert 0.15 <= actual_missing_ratio <= 0.25
+
+    def test_realistic_vs_mcar_gap_patterns(self):
+        """Test that realistic masking produces different gap patterns than MCAR."""
+        torch.manual_seed(42)
+        data = torch.randn(50, 336, 6)  # 50 samples, 2 weeks, 6 variables
+
+        # Apply realistic mask
+        realistic_mask = apply_realistic_mask(data, missing_ratio=0.2, seed=42)
+
+        # Apply MCAR mask with wide gap range (should be more uniform)
+        mcar_mask = apply_mcar_mask(
+            data, missing_ratio=0.2, min_gap_length=1, max_gap_length=336, seed=43
+        )
+
+        # Both should have similar overall missing ratios
+        realistic_ratio = (~realistic_mask).float().mean().item()
+        mcar_ratio = (~mcar_mask).float().mean().item()
+        assert abs(realistic_ratio - mcar_ratio) < 0.1
+
+        # Masks should be different (different random patterns)
+        assert not torch.equal(realistic_mask, mcar_mask)
