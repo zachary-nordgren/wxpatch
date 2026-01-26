@@ -4,6 +4,88 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Point Metrics Implementation (v0.3.9)
+
+### TASK-020 through TASK-023: Point Evaluation Metrics
+
+**Status:** Completed
+
+**Implementation:**
+- Completely rewrote `src/weather_imputation/evaluation/metrics.py` to use PyTorch tensors
+- Replaced legacy Polars Series-based API with PyTorch tensor API matching SPEC.md section 6.2
+- Implemented 5 point metrics: RMSE, MAE, MSE, Bias, R²
+- Created comprehensive test suite: 31 tests in `tests/test_metrics.py` (all passing)
+- Added convenience function `compute_all_metrics()` for computing all metrics at once
+- Ruff checks passing
+
+**Key Design Decisions:**
+- **Tensor shapes**: (N, T, V) = (samples, timesteps, variables) convention from SPEC.md
+- **Mask convention**: True=evaluate this position, False=ignore
+- **Masked evaluation**: All metrics compute only on masked positions (typically synthetic gaps)
+- **Error handling**: Returns NaN when no valid positions to evaluate
+- **Input validation**: Checks shape consistency and mask dtype
+- **Device agnostic**: Works with CPU and GPU tensors
+
+**API Contract (from SPEC.md section 6.2):**
+```python
+def compute_rmse(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float
+def compute_mae(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float
+def compute_bias(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float
+def compute_r2_score(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float
+def compute_mse(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float
+def compute_all_metrics(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> dict[str, float]
+```
+
+**Implementation Details:**
+- **RMSE**: sqrt(mean((y_true - y_pred)²)) on masked positions
+- **MAE**: mean(|y_true - y_pred|) on masked positions
+- **MSE**: mean((y_true - y_pred)²) on masked positions
+- **Bias**: mean(y_pred - y_true) on masked positions
+  - Positive bias = systematic overestimation
+  - Negative bias = systematic underestimation
+- **R² score**: 1 - (SS_res / SS_tot) on masked positions
+  - R²=1.0: perfect predictions
+  - R²=0.0: predictions as good as mean baseline
+  - R²<0.0: predictions worse than mean baseline
+  - Returns NaN for constant ground truth (zero variance)
+
+**Test Coverage:**
+- RMSE (8 tests): perfect prediction, known values, partial mask, multiple samples, empty mask, shape mismatch, wrong dtype, device consistency
+- MAE (4 tests): perfect prediction, known values, partial mask, empty mask
+- Bias (4 tests): no bias, positive bias, negative bias, partial mask
+- R² (6 tests): perfect prediction, mean baseline, worse than mean, good prediction, constant values, partial mask
+- MSE (3 tests): perfect prediction, known values, MSE-RMSE relationship
+- compute_all_metrics (3 tests): all metrics returned, perfect prediction, empty mask
+- Edge cases (3 tests): large batch, single value, mixed mask pattern, extreme values
+
+**Lessons Learned:**
+- PyTorch boolean indexing (`y_true[mask]`) efficiently selects only evaluation positions
+- Tensor.item() converts single-element tensor to Python scalar
+- NaN handling important for edge cases (empty masks, constant values)
+- All metrics use consistent validation and mask handling patterns
+- MSE = RMSE² relationship verified in tests
+- R² can be negative when predictions worse than mean baseline
+- Device-agnostic code allows CPU/GPU flexibility
+
+**Implementation Challenges:**
+- None - straightforward implementation once tensor API was established
+- Legacy Polars API removed in favor of cleaner PyTorch tensor API
+- Comprehensive test suite catches all edge cases
+
+**Confidence:** KNOWN - Implements standard statistical metrics for regression evaluation. RMSE, MAE, MSE, Bias, and R² are well-established metrics in ML literature. PyTorch tensor operations are deterministic and well-tested. Conforms to SPEC.md section 6.2 API contract. Implements FR-011 from SPEC.md (point metrics).
+
+**References:**
+- [Root Mean Square Error - Wikipedia](https://en.wikipedia.org/wiki/Root-mean-square_deviation)
+- [Coefficient of Determination - Wikipedia](https://en.wikipedia.org/wiki/Coefficient_of_determination)
+- [Mean Absolute Error - Wikipedia](https://en.wikipedia.org/wiki/Mean_absolute_error)
+
+**Next Steps:**
+- TASK-024: Implement gap-length stratified evaluation
+- TASK-025: Implement seasonal stratified evaluation
+- TASK-026: Implement per-variable evaluation
+
+---
+
 ## 2026-01-26 - MICE Imputation Implementation (v0.3.8)
 
 ### TASK-019: Implement MICE (Multiple Imputation by Chained Equations)

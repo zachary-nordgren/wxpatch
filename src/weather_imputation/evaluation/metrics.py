@@ -1,208 +1,236 @@
-"""Evaluation metrics for imputation quality."""
+"""Evaluation metrics for imputation quality using PyTorch tensors.
 
-import math
-from dataclasses import dataclass
+All metrics follow the convention:
+- Input tensors have shape (N, T, V) where N=samples, T=timesteps, V=variables
+- mask tensor: True=evaluate this position, False=ignore
+- Metrics compute only on masked positions (typically the synthetic gaps)
+"""
 
-import polars as pl
-
-
-@dataclass
-class ImputationMetrics:
-    """Container for imputation evaluation metrics."""
-
-    rmse: float  # Root Mean Squared Error
-    mae: float  # Mean Absolute Error
-    mape: float | None  # Mean Absolute Percentage Error (None if zeros present)
-    r2: float  # R-squared (coefficient of determination)
-    bias: float  # Mean error (positive = overestimate)
-    coverage: float  # Fraction of values successfully imputed
-
-    def to_dict(self) -> dict[str, float | None]:
-        return {
-            "rmse": self.rmse,
-            "mae": self.mae,
-            "mape": self.mape,
-            "r2": self.r2,
-            "bias": self.bias,
-            "coverage": self.coverage,
-        }
+import torch
+from torch import Tensor
 
 
-def rmse(actual: pl.Series, predicted: pl.Series) -> float:
-    """Calculate Root Mean Squared Error.
+def compute_rmse(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float:
+    """Compute Root Mean Squared Error on masked positions only.
 
     Args:
-        actual: True values
-        predicted: Predicted/imputed values
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
 
     Returns:
-        RMSE value
-    """
-    # Filter to non-null pairs
-    mask = actual.is_not_null() & predicted.is_not_null()
-    a = actual.filter(mask)
-    p = predicted.filter(mask)
+        RMSE value (scalar float). Returns NaN if no valid positions.
 
-    if len(a) == 0:
+    Example:
+        >>> y_true = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])  # (1, 2, 2)
+        >>> y_pred = torch.tensor([[[1.5, 2.0], [3.0, 5.0]]])
+        >>> mask = torch.tensor([[[True, False], [False, True]]])
+        >>> rmse = compute_rmse(y_true, y_pred, mask)
+        >>> # Only positions (0,0,0) and (0,1,1) are evaluated
+    """
+    if y_true.shape != y_pred.shape or y_true.shape != mask.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}, "
+            f"mask {mask.shape}"
+        )
+
+    if mask.dtype != torch.bool:
+        raise TypeError(f"mask must be bool dtype, got {mask.dtype}")
+
+    # Select only masked positions
+    y_true_masked = y_true[mask]
+    y_pred_masked = y_pred[mask]
+
+    if y_true_masked.numel() == 0:
         return float("nan")
 
-    squared_errors = (a - p) ** 2
-    return math.sqrt(squared_errors.mean())
+    # Compute RMSE
+    squared_errors = (y_true_masked - y_pred_masked) ** 2
+    mse = squared_errors.mean()
+    rmse_value = torch.sqrt(mse)
+
+    return rmse_value.item()
 
 
-def mae(actual: pl.Series, predicted: pl.Series) -> float:
-    """Calculate Mean Absolute Error.
+def compute_mae(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float:
+    """Compute Mean Absolute Error on masked positions only.
 
     Args:
-        actual: True values
-        predicted: Predicted/imputed values
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
 
     Returns:
-        MAE value
+        MAE value (scalar float). Returns NaN if no valid positions.
     """
-    mask = actual.is_not_null() & predicted.is_not_null()
-    a = actual.filter(mask)
-    p = predicted.filter(mask)
+    if y_true.shape != y_pred.shape or y_true.shape != mask.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}, "
+            f"mask {mask.shape}"
+        )
 
-    if len(a) == 0:
+    if mask.dtype != torch.bool:
+        raise TypeError(f"mask must be bool dtype, got {mask.dtype}")
+
+    # Select only masked positions
+    y_true_masked = y_true[mask]
+    y_pred_masked = y_pred[mask]
+
+    if y_true_masked.numel() == 0:
         return float("nan")
 
-    return (a - p).abs().mean()
+    # Compute MAE
+    absolute_errors = torch.abs(y_true_masked - y_pred_masked)
+    mae_value = absolute_errors.mean()
+
+    return mae_value.item()
 
 
-def mape(actual: pl.Series, predicted: pl.Series) -> float | None:
-    """Calculate Mean Absolute Percentage Error.
+def compute_bias(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float:
+    """Compute mean bias (systematic error) on masked positions only.
 
-    Args:
-        actual: True values
-        predicted: Predicted/imputed values
-
-    Returns:
-        MAPE value as percentage, or None if actual contains zeros
-    """
-    mask = actual.is_not_null() & predicted.is_not_null() & (actual != 0)
-    a = actual.filter(mask)
-    p = predicted.filter(mask)
-
-    if len(a) == 0:
-        return None
-
-    percentage_errors = ((a - p).abs() / a.abs()) * 100
-    return percentage_errors.mean()
-
-
-def r_squared(actual: pl.Series, predicted: pl.Series) -> float:
-    """Calculate R-squared (coefficient of determination).
+    Bias = mean(y_pred - y_true)
+    Positive bias means predictions are systematically too high.
+    Negative bias means predictions are systematically too low.
 
     Args:
-        actual: True values
-        predicted: Predicted/imputed values
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
 
     Returns:
-        R² value (1.0 = perfect, 0.0 = baseline, negative = worse than mean)
+        Bias value (scalar float). Returns NaN if no valid positions.
     """
-    mask = actual.is_not_null() & predicted.is_not_null()
-    a = actual.filter(mask)
-    p = predicted.filter(mask)
+    if y_true.shape != y_pred.shape or y_true.shape != mask.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}, "
+            f"mask {mask.shape}"
+        )
 
-    if len(a) == 0:
+    if mask.dtype != torch.bool:
+        raise TypeError(f"mask must be bool dtype, got {mask.dtype}")
+
+    # Select only masked positions
+    y_true_masked = y_true[mask]
+    y_pred_masked = y_pred[mask]
+
+    if y_true_masked.numel() == 0:
         return float("nan")
 
-    # Total sum of squares
-    mean_actual = a.mean()
-    ss_tot = ((a - mean_actual) ** 2).sum()
+    # Compute bias
+    errors = y_pred_masked - y_true_masked
+    bias_value = errors.mean()
 
-    # Residual sum of squares
-    ss_res = ((a - p) ** 2).sum()
+    return bias_value.item()
+
+
+def compute_r2_score(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float:
+    """Compute R² (coefficient of determination) on masked positions only.
+
+    R² = 1 - (SS_res / SS_tot)
+    where SS_res = sum of squared residuals
+          SS_tot = total sum of squares (variance)
+
+    R² = 1.0 means perfect predictions
+    R² = 0.0 means predictions are as good as mean baseline
+    R² < 0.0 means predictions are worse than mean baseline
+
+    Args:
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
+
+    Returns:
+        R² score (scalar float). Returns NaN if no valid positions or zero variance.
+    """
+    if y_true.shape != y_pred.shape or y_true.shape != mask.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}, "
+            f"mask {mask.shape}"
+        )
+
+    if mask.dtype != torch.bool:
+        raise TypeError(f"mask must be bool dtype, got {mask.dtype}")
+
+    # Select only masked positions
+    y_true_masked = y_true[mask]
+    y_pred_masked = y_pred[mask]
+
+    if y_true_masked.numel() == 0:
+        return float("nan")
+
+    # Total sum of squares (variance around mean)
+    mean_y_true = y_true_masked.mean()
+    ss_tot = ((y_true_masked - mean_y_true) ** 2).sum()
 
     if ss_tot == 0:
+        # Zero variance in ground truth (constant values)
         return float("nan")
 
-    return 1 - (ss_res / ss_tot)
+    # Residual sum of squares
+    ss_res = ((y_true_masked - y_pred_masked) ** 2).sum()
+
+    # R² score
+    r2 = 1 - (ss_res / ss_tot)
+
+    return r2.item()
 
 
-def bias(actual: pl.Series, predicted: pl.Series) -> float:
-    """Calculate mean bias (systematic error).
-
-    Positive bias means predictions are systematically too high.
+def compute_mse(y_true: Tensor, y_pred: Tensor, mask: Tensor) -> float:
+    """Compute Mean Squared Error on masked positions only.
 
     Args:
-        actual: True values
-        predicted: Predicted/imputed values
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
 
     Returns:
-        Mean bias
+        MSE value (scalar float). Returns NaN if no valid positions.
     """
-    mask = actual.is_not_null() & predicted.is_not_null()
-    a = actual.filter(mask)
-    p = predicted.filter(mask)
+    if y_true.shape != y_pred.shape or y_true.shape != mask.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}, "
+            f"mask {mask.shape}"
+        )
 
-    if len(a) == 0:
+    if mask.dtype != torch.bool:
+        raise TypeError(f"mask must be bool dtype, got {mask.dtype}")
+
+    # Select only masked positions
+    y_true_masked = y_true[mask]
+    y_pred_masked = y_pred[mask]
+
+    if y_true_masked.numel() == 0:
         return float("nan")
 
-    return (p - a).mean()
+    # Compute MSE
+    squared_errors = (y_true_masked - y_pred_masked) ** 2
+    mse_value = squared_errors.mean()
 
-
-def coverage(original: pl.Series, imputed: pl.Series) -> float:
-    """Calculate imputation coverage.
-
-    Coverage is the fraction of originally missing values that were imputed.
-
-    Args:
-        original: Original series with missing values
-        imputed: Series after imputation
-
-    Returns:
-        Coverage as fraction (0-1)
-    """
-    originally_missing = original.null_count()
-    if originally_missing == 0:
-        return 1.0
-
-    still_missing = imputed.null_count()
-    imputed_count = originally_missing - still_missing
-
-    return imputed_count / originally_missing
-
-
-def crps(actual: pl.Series, predicted_samples: list[pl.Series]) -> float:
-    """Calculate Continuous Ranked Probability Score.
-
-    CRPS measures the quality of probabilistic predictions by comparing
-    the predicted distribution to the actual value.
-
-    Args:
-        actual: True values
-        predicted_samples: List of sample predictions (ensemble)
-
-    Returns:
-        Mean CRPS value (lower is better)
-    """
-    # TODO: Implement full CRPS calculation
-    # For now, return NaN as placeholder
-    return float("nan")
+    return mse_value.item()
 
 
 def compute_all_metrics(
-    actual: pl.Series,
-    predicted: pl.Series,
-    original: pl.Series | None = None,
-) -> ImputationMetrics:
-    """Compute all standard imputation metrics.
+    y_true: Tensor, y_pred: Tensor, mask: Tensor
+) -> dict[str, float]:
+    """Compute all standard point metrics on masked positions.
+
+    This is a convenience function that computes RMSE, MAE, MSE, Bias, and R²
+    in a single call.
 
     Args:
-        actual: True values (before gaps were introduced)
-        predicted: Predicted/imputed values
-        original: Original series with gaps (for coverage calculation)
+        y_true: Ground truth values, shape (N, T, V)
+        y_pred: Predicted values, shape (N, T, V)
+        mask: Evaluation mask, shape (N, T, V), True=evaluate, False=ignore
 
     Returns:
-        ImputationMetrics dataclass
+        Dictionary with keys: rmse, mae, mse, bias, r2
+        All values are scalar floats (may be NaN if no valid positions)
     """
-    return ImputationMetrics(
-        rmse=rmse(actual, predicted),
-        mae=mae(actual, predicted),
-        mape=mape(actual, predicted),
-        r2=r_squared(actual, predicted),
-        bias=bias(actual, predicted),
-        coverage=coverage(original, predicted) if original is not None else 1.0,
-    )
+    return {
+        "rmse": compute_rmse(y_true, y_pred, mask),
+        "mae": compute_mae(y_true, y_pred, mask),
+        "mse": compute_mse(y_true, y_pred, mask),
+        "bias": compute_bias(y_true, y_pred, mask),
+        "r2": compute_r2_score(y_true, y_pred, mask),
+    }

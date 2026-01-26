@@ -151,28 +151,28 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 ### Evaluation Framework
 
 #### TASK-020: Implement RMSE metric
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_metrics.py::test_rmse -v` passes
 - **Context:** `src/weather_imputation/evaluation/metrics.py`, `tests/test_metrics.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented all point metrics (RMSE, MAE, MSE, Bias, R²) using PyTorch tensors. 31 tests passing. Ruff checks passing.
 
 #### TASK-021: Implement MAE metric
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_metrics.py::test_mae -v` passes
 - **Context:** `src/weather_imputation/evaluation/metrics.py`, `tests/test_metrics.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26 alongside TASK-020. Implemented as part of comprehensive metrics module.
 
 #### TASK-022: Implement Bias metric
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_metrics.py::test_bias -v` passes
 - **Context:** `src/weather_imputation/evaluation/metrics.py`, `tests/test_metrics.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26 alongside TASK-020. Implemented as part of comprehensive metrics module.
 
 #### TASK-023: Implement R² score metric
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_metrics.py::test_r2_score -v` passes
 - **Context:** `src/weather_imputation/evaluation/metrics.py`, `tests/test_metrics.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26 alongside TASK-020. Implemented as part of comprehensive metrics module.
 
 #### TASK-024: Implement gap-length stratified evaluation
 - **Status:** TODO
