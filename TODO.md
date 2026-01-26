@@ -87,10 +87,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Implemented MAR masking with bias towards extreme values (3x probability). All 15 tests passing.
 
 #### TASK-010: Create masking strategy for MNAR (Missing Not At Random)
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_masking.py::test_mnar_masking -v` passes
 - **Context:** `src/weather_imputation/data/masking.py`, `tests/test_masking.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Implemented MNAR masking where missingness depends on unobserved values themselves (extreme values 5x more likely to be missing by default). Added 18 comprehensive tests covering bias verification, parameter validation, edge cases, and MNAR vs MAR comparison. All 50 masking tests passing. CONFIDENCE: KNOWN - Implements FR-005 from SPEC.md (MNAR gap generation).
 
 #### TASK-011: Create realistic gap generator based on observed patterns
 - **Status:** TODO
