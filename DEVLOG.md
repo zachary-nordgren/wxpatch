@@ -1323,3 +1323,91 @@ src/
 - Default to 4 workers for parallel metadata computation
 - Parquet format for all intermediate/final data files
 - Profile before optimizing - metadata computation is I/O bound
+
+---
+
+## 2026-01-26 - Gap Analysis Notebook (v0.3.12)
+
+### TASK-028: Create Gap Analysis Notebook
+
+**Status:** Completed
+
+**Implementation:**
+Created interactive Marimo notebook for analyzing missing data patterns in GHCNh weather data and comparing synthetic masking strategies with natural gap distributions.
+
+**Notebook Structure:**
+1. **Data Loading:**
+   - Loads station metadata (filters to high-quality stations: ≥80% temp completeness, ≥10 years)
+   - Samples 10 stations from US for detailed analysis
+   - Interactive dropdown for station selection
+
+2. **Natural Gap Analysis:**
+   - Loads 2018-2023 time series data for selected station
+   - Identifies all gaps (consecutive missing values) in temperature data
+   - Computes gap statistics:
+     - Total gaps, total missing hours, missing percentage
+     - Mean, median, and maximum gap length
+   - Visualizes gap length distribution with log scale histogram
+   - Reference lines at 6h (short) and 72h (medium) thresholds
+
+3. **Gap Categorization:**
+   - Classifies gaps into three categories:
+     - Short (≤6h): Sensor noise, brief outages
+     - Medium (6-72h): Maintenance, temporary failures  
+     - Long (>72h): Equipment failures, extended outages
+   - Displays count and total hours per category in markdown table
+
+4. **Synthetic Masking Comparison:**
+   - Interactive sliders for masking parameters:
+     - Missing ratio (0.05-0.5)
+     - Min gap length (1-12 hours)
+     - Max gap length (12-336 hours)
+   - Generates synthetic masks using 4 strategies:
+     - **MCAR**: Uniform random sampling
+     - **MAR**: Biased toward extreme observed values (3x probability)
+     - **MNAR**: Biased toward extreme unobserved values (5x probability)
+     - **Realistic**: Empirical gap distribution from GHCNh (50% short, 40% medium, 10% long)
+   - Compares statistics across all strategies in table
+   - Displays 2x2 subplot comparing gap distributions
+
+5. **Summary and Insights:**
+   - Key observations about natural vs synthetic gaps
+   - Recommendations for training/evaluation:
+     - Realistic masking for training (most realistic)
+     - All four strategies for evaluation (test robustness)
+     - MCAR for ablation studies (clean baseline)
+     - MNAR for stress testing (hardest scenario)
+
+**Technical Decisions:**
+- **CONFIDENCE: KNOWN** - Gap categorization thresholds based on TASK-011 implementation
+- **CONFIDENCE: INFERRED** - Station sampling strategy (top 10 by completeness from US)
+- Used underscore prefixes for loop variables to avoid Marimo variable conflicts
+- Passed `np` and `pl` explicitly to cells that need them (Marimo's dependency tracking)
+
+**Validation Results:**
+- ✓ Marimo check passed (no structural issues, unique variables)
+- ✓ Ruff linting passed (all checks passed, line length ≤100)
+- ✓ All imports correctly configured
+- ✓ Notebook structure validated for execution
+
+**Key Implementation Details:**
+- Gap detection algorithm: Iterates through time series, tracks consecutive missing values
+- Synthetic masking uses seed=42 for reproducibility
+- Handles edge cases: no gaps, all missing, leading/trailing gaps
+- Histogram uses log scale for frequency to show long tail
+- Bin edges for comparison plot: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+
+**Next Steps:**
+- User can explore different stations to validate gap pattern consistency
+- Results inform masking strategy selection for model training (TASK-031+)
+- Insights guide evaluation protocol design (TASK-032)
+
+**Files Modified:**
+- Created: `notebooks/02_gap_analysis.py`
+- Updated: `TODO.md` (TASK-028 marked DONE)
+- Updated: `DEVLOG.md` (this entry)
+
+**Dependencies:**
+- Uses existing masking functions from `src/weather_imputation/data/masking.py` (TASK-008 through TASK-011)
+- Leverages loader functions from `src/weather_imputation/data/ghcnh_loader.py` (TASK-006, TASK-007)
+- Requires metadata from `compute_metadata.py` and `clean_metadata.py`

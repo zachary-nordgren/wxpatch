@@ -201,10 +201,18 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Notebook existed from v0.2.4 but had variable name conflicts and linting issues. Fixed marimo validation errors (variable 'output' in multiple cells), removed unused variables, fixed import sorting, resolved line length issues. All marimo check and ruff validation passing. Notebook includes: filtering controls (temp completeness, min years, min observations, coord validation), distribution histograms, geographic map with folium, K-means clustering with configurable features, cluster visualizations, and CSV export functionality.
 
 #### TASK-028: Create gap analysis notebook
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `marimo edit notebooks/02_gap_analysis.py` opens without errors and displays gap distributions
 - **Context:** `notebooks/02_gap_analysis.py`, `src/weather_imputation/data/masking.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Created interactive notebook with:
+  - Station selection UI for exploring different locations
+  - Natural gap analysis (identifies and characterizes gaps in real data)
+  - Gap length distribution visualization with log scale
+  - Gap categorization (short/medium/long)
+  - Synthetic masking comparison (MCAR/MAR/MNAR/Realistic)
+  - Side-by-side comparison of natural vs synthetic gap patterns
+  - Summary of insights and recommendations for model training
+  All marimo validation and ruff checks passing.
 
 ### Utilities
 
