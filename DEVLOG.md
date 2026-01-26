@@ -4,6 +4,62 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Data Pipeline: PyTorch Dataset for Time Series Windows (v0.3.3)
+
+### TASK-014: Create PyTorch Dataset for Time Series Windows
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/data/dataset.py` with:
+  - `TimeSeriesImputationDataset`: PyTorch Dataset for windowed time series with masking
+  - Sliding window extraction with configurable window_size and stride
+  - Synthetic gap generation via integration with masking module
+  - Station metadata conditioning (optional)
+  - Comprehensive input validation
+- Created comprehensive test suite: 25 tests covering all functionality
+- All tests passing, ruff checks passing
+
+**Key Design Decisions:**
+- Dataset returns windows as dictionaries with keys: observed, mask, target, timestamps, sample_idx, window_start, (optional) station_features
+- `observed` tensor has masked positions set to 0 (ready for model input)
+- `target` tensor always has ground truth values (for loss computation)
+- `mask` tensor uses True=observed, False=missing convention
+- Synthetic masking applied per-window on-the-fly (not pre-computed)
+- Synthetic mask combines with existing mask using logical AND
+- Window indexing: flat index across all samples (enables DataLoader shuffling)
+- Validation order: check stride/window_size before using them in calculations
+
+**Implementation Challenges:**
+- Initial API mismatch with `apply_mask()` - corrected to use `MaskingConfig` object
+- Seed parameter not part of `MaskingConfig` schema - extracted separately
+- Validation order caused stride test to fail - reordered validations
+- Line length linting issues - split long lines and combined nested conditionals
+
+**Test Coverage:**
+- Initialization: basic, with station features, all validation checks
+- Window computation: windows per sample, total windows, different stride/window_size ratios
+- __getitem__: basic functionality, window extraction correctness, station features, index validation, observed masking
+- Synthetic masking: MCAR application, disabled masking, None strategy
+- Edge cases: single window, stride=window_size, stride=1 (maximum overlap)
+- Integration: iteration, DataLoader compatibility, reproducibility with seeds
+
+**Lessons Learned:**
+- PyTorch Dataset __getitem__ can return any Python object (dict is convenient for multi-modal data)
+- Flat indexing across samples simplifies DataLoader integration
+- On-the-fly masking provides flexibility but requires careful seed management
+- Combining synthetic masks with existing masks via AND preserves real missing patterns
+- Input validation should check constraints before using values in calculations
+- Test-driven development catches API mismatches early
+
+**Confidence:** KNOWN - Implements standard PyTorch Dataset patterns for time series windowing. Integrates with existing masking and normalization modules. Compatible with PyTorch DataLoader for batching and shuffling.
+
+**Next Steps:**
+- TASK-015: Implement DataLoader with custom collation function (may not be needed - default collation works)
+- TASK-016: Implement BaseImputer protocol
+
+---
+
 ## 2026-01-25 - Data Pipeline: Train/Val/Test Splitting (v0.3.2)
 
 ### TASK-013: Strategy D Train/Val/Test Splitting

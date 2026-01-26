@@ -111,10 +111,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Implemented all 4 splitting strategies (spatial, temporal, hybrid, simulated). Strategy D (simulated) returns all stations for all splits, with actual differentiation happening via synthetic masking during training. Created 39 comprehensive tests, all passing. Includes temporal mask utilities for splitting time series data. CONFIDENCE: KNOWN - Implements FR-006 from SPEC.md and matches SAITS/CSDI training methodology.
 
 #### TASK-014: Create PyTorch Dataset for time series windows
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_dataset.py::test_timeseries_dataset -v` passes
 - **Context:** `src/weather_imputation/data/dataset.py`, `tests/test_dataset.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Created TimeSeriesImputationDataset with sliding window extraction, synthetic masking support, and station metadata conditioning. Added 25 comprehensive tests, all passing. Ruff checks passing.
 
 #### TASK-015: Implement DataLoader with collation function
 - **Status:** TODO
