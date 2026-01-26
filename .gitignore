@@ -75,10 +75,9 @@ coverage.xml
 # Log file from config.py
 weather_data_processing.log
 
-# Data directories
-data/
-data/raw/
-data/merged/
+# Data directories (exclude actual data files, not source code)
+/data/
+!/data/.gitkeep
 
 # Temporary files
 *.tmp
