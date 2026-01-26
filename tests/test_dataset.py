@@ -553,6 +553,94 @@ def test_dataset_with_dataloader(sample_data, sample_mask, sample_timestamps):
     assert batch["window_start"].shape == (8,)
 
 
+def test_dataloader_collation(sample_data, sample_mask, sample_timestamps):
+    """Test comprehensive DataLoader collation scenarios."""
+    from torch.utils.data import DataLoader
+
+    # Test 1: Basic collation without station features
+    dataset_no_features = TimeSeriesImputationDataset(
+        data=sample_data,
+        mask=sample_mask,
+        timestamps=sample_timestamps,
+        window_size=20,
+        stride=10,
+        apply_synthetic_mask=False,
+    )
+
+    dataloader_no_features = DataLoader(
+        dataset_no_features, batch_size=8, shuffle=False
+    )
+    batch = next(iter(dataloader_no_features))
+
+    # Verify batch shapes
+    assert batch["observed"].shape == (8, 20, 3)
+    assert batch["mask"].shape == (8, 20, 3)
+    assert batch["target"].shape == (8, 20, 3)
+    assert batch["timestamps"].shape == (8, 20)
+    assert batch["sample_idx"].shape == (8,)
+    assert batch["window_start"].shape == (8,)
+    assert "station_features" not in batch
+
+    # Test 2: Collation with station features
+    station_features = torch.randn(5, 4)  # 5 stations, 4 features
+    dataset_with_features = TimeSeriesImputationDataset(
+        data=sample_data,
+        mask=sample_mask,
+        timestamps=sample_timestamps,
+        station_features=station_features,
+        window_size=20,
+        stride=10,
+        apply_synthetic_mask=False,
+    )
+
+    dataloader_with_features = DataLoader(
+        dataset_with_features, batch_size=8, shuffle=False
+    )
+    batch = next(iter(dataloader_with_features))
+
+    assert batch["station_features"].shape == (8, 4)
+
+    # Test 3: Collation with synthetic masking
+    dataset_with_masking = TimeSeriesImputationDataset(
+        data=sample_data,
+        mask=sample_mask,
+        timestamps=sample_timestamps,
+        window_size=20,
+        stride=10,
+        masking_strategy="mcar",
+        masking_config={"missing_ratio": 0.2},
+        apply_synthetic_mask=True,
+    )
+
+    dataloader_with_masking = DataLoader(
+        dataset_with_masking, batch_size=8, shuffle=False, num_workers=0
+    )
+    batch = next(iter(dataloader_with_masking))
+
+    # Verify shapes still correct with synthetic masking
+    assert batch["observed"].shape == (8, 20, 3)
+    assert batch["mask"].shape == (8, 20, 3)
+
+    # Test 4: Shuffle and different batch sizes
+    dataloader_shuffled = DataLoader(
+        dataset_no_features, batch_size=3, shuffle=True
+    )
+    batch = next(iter(dataloader_shuffled))
+
+    assert batch["observed"].shape == (3, 20, 3)
+
+    # Test 5: Drop last batch
+    dataloader_drop_last = DataLoader(
+        dataset_no_features, batch_size=10, shuffle=False, drop_last=True
+    )
+    batches = list(dataloader_drop_last)
+
+    # Should have 4 batches (45 samples // 10 = 4 full batches)
+    assert len(batches) == 4
+    for batch in batches:
+        assert batch["observed"].shape == (10, 20, 3)
+
+
 def test_reproducibility_with_seed(sample_data, sample_mask, sample_timestamps):
     """Test that seeded synthetic masking is reproducible."""
     dataset1 = TimeSeriesImputationDataset(

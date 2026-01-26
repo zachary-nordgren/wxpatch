@@ -117,10 +117,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Created TimeSeriesImputationDataset with sliding window extraction, synthetic masking support, and station metadata conditioning. Added 25 comprehensive tests, all passing. Ruff checks passing.
 
 #### TASK-015: Implement DataLoader with collation function
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_dataset.py::test_dataloader_collation -v` passes
 - **Context:** `src/weather_imputation/data/dataset.py`, `tests/test_dataset.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Custom collation function not needed - PyTorch's default collate_fn correctly handles dictionary outputs with tensors. Added comprehensive test covering all DataLoader scenarios: basic batching, station features, synthetic masking, shuffling, batch sizes, and drop_last. All 26 dataset tests passing.
 
 ### Classical Baselines
 

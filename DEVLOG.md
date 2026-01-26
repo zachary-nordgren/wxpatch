@@ -4,6 +4,56 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - Data Pipeline: DataLoader Collation (v0.3.4)
+
+### TASK-015: Implement DataLoader with Collation Function
+
+**Status:** Completed
+
+**Implementation:**
+- Created comprehensive test `test_dataloader_collation()` in `tests/test_dataset.py`
+- Verified that PyTorch's default `collate_fn` correctly handles dictionary outputs
+- Tested 5 DataLoader scenarios:
+  1. Basic batching without station features
+  2. Batching with station features
+  3. Batching with synthetic masking
+  4. Shuffling and different batch sizes
+  5. drop_last functionality
+
+**Key Findings:**
+- **Custom collation function NOT needed**: PyTorch's default `collate_fn` automatically:
+  - Stacks tensors from dictionary values across batch dimension
+  - Preserves dictionary structure in batched output
+  - Handles optional keys (e.g., station_features) correctly
+  - Works seamlessly with shuffle, drop_last, and num_workers parameters
+
+**Decision Rationale:**
+- PyTorch's default collation already implements exactly what we need
+- Creating custom collation would add unnecessary complexity without benefit
+- Default collation handles all our use cases: observed, mask, target, timestamps, sample_idx, window_start, station_features
+
+**Test Coverage:**
+- 26 total tests in test_dataset.py (all passing)
+- Comprehensive DataLoader test covers:
+  - Shape validation for all batch dimensions
+  - Optional dictionary keys (station_features)
+  - Synthetic masking integration
+  - Shuffle and batch size variations
+  - drop_last edge case (partial final batch)
+
+**Lessons Learned:**
+- PyTorch DataLoader's default collation is very powerful - it recursively handles nested structures
+- Dictionary outputs from Dataset.__getitem__ are automatically batched into dictionaries of batched tensors
+- Always test with actual DataLoader before assuming custom collation is needed
+- YAGNI principle: don't implement infrastructure until proven necessary
+
+**Confidence:** KNOWN - PyTorch's default collation behavior is well-documented and tested. Comprehensive test suite validates all use cases.
+
+**Next Steps:**
+- TASK-016: Implement BaseImputer protocol
+
+---
+
 ## 2026-01-26 - Data Pipeline: PyTorch Dataset for Time Series Windows (v0.3.3)
 
 ### TASK-014: Create PyTorch Dataset for Time Series Windows
