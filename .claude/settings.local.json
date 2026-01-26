@@ -14,7 +14,13 @@
       "Bash(uv run python:*)",
       "Bash(uv pip install:*)",
       "Bash(set:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run:*)",
+      "Bash(uv add:*)"
     ]
   }
 }
