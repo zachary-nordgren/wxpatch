@@ -46,6 +46,9 @@ After 2 failed attempts on the same problem, STOP and report what you've learned
 - **README.md** - Usage guide, command reference, data schemas, directory structure
 - **pyproject.toml** - Dependencies and tool configuration
 - **docs/ghcnh_DOCUMENTATION.pdf** - Official NOAA data format documentation
+- **docs/papers/** - Research papers relevant to the project
+
+**Note:** When researching or implementing features, if you find relevant papers from arXiv (e.g., SAITS, CSDI, imputation methods), download them and add them to `docs/papers/` for future reference.
 
 ## Quick Reference
 
