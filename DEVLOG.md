@@ -4,6 +4,55 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-25 - Data Pipeline: Normalization (v0.3.1)
+
+### TASK-012: Per-Variable Normalization Utilities
+
+**Status:** Completed
+
+**Implementation:**
+- Created `src/weather_imputation/data/normalization.py` with:
+  - `NormalizationStats`: Pydantic model storing mean, std, min, max, n_observed per variable
+  - `Normalizer`: Main class for fit/transform/inverse_transform workflow
+  - Three normalization methods: zscore (mean=0, std=1), minmax (0-1 range), none (passthrough)
+  - Convenience function `normalize_variables()` for one-step fit+transform
+- Created comprehensive test suite: 23 tests covering all functionality
+- All tests passing, ruff checks passing
+
+**Key Design Decisions:**
+- Statistics computed only from observed (non-missing) values
+- Normalization applied only to observed positions; missing values left unchanged
+- Per-variable statistics (each variable normalized independently)
+- Edge case handling: constant variables (std=0 or min=max) handled gracefully
+- Optional outlier clipping for zscore normalization (beyond ±5 std devs)
+- Clean separation: fit() computes stats, transform() applies normalization, inverse_transform() denormalizes
+
+**Implementation Challenges:**
+- Initially considered per-station vs global normalization, decided on per-station as default (configurable in DataConfig)
+- Normalization only on observed values requires careful mask handling
+- Edge cases: constant variables, mostly missing data, single samples
+
+**Test Coverage:**
+- NormalizationStats creation
+- Normalizer initialization with different methods
+- Fit with zscore/minmax, shape validation, no observed values, constant variables
+- Transform with zscore/minmax/none, outlier clipping, not fitted error, shape mismatch
+- Inverse transform with zscore/minmax/none, not fitted error
+- Convenience function normalize_variables()
+- Edge cases: all observed, mostly missing, single sample, reproducibility
+- Validates round-trip (transform → inverse_transform = original)
+
+**Lessons Learned:**
+- PyTorch tensor operations with boolean masks are efficient for selective normalization
+- Pydantic models work well for storing normalization statistics (serialization support)
+- Per-variable normalization critical for weather data (variables on vastly different scales)
+- Z-score normalization preferred for neural networks (stable gradients)
+- Min-max normalization useful for variables with known bounded ranges
+
+**Confidence:** KNOWN - Implements FR-007 from SPEC.md (per-variable normalization). Standard normalization patterns for time series data.
+
+---
+
 ## 2026-01-25 - Documentation Refactoring
 
 **Status:** Completed

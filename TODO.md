@@ -99,10 +99,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-25. Implemented `apply_realistic_mask()` with empirical and log-normal gap distributions. Gap distribution based on GHCNh metadata analysis: 50% short (1-6h), 40% medium (6-72h), 10% long (72-336h) gaps. All 13 new tests passing, 63 total masking tests passing. CONFIDENCE: INFERRED - Gap distribution parameters based on empirical GHCNh data analysis.
 
 #### TASK-012: Implement per-variable normalization utilities
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_normalization.py::test_normalize_variables -v` passes
 - **Context:** `src/weather_imputation/data/normalization.py`, `tests/test_normalization.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-25. Created Normalizer class with zscore, minmax, and none normalization methods. Handles missing values gracefully (only normalizes observed values). Added 23 comprehensive tests covering fit/transform/inverse_transform, edge cases (constant variables, mostly missing data), and reproducibility. All tests passing. CONFIDENCE: KNOWN - Implements FR-007 from SPEC.md (per-variable normalization).
 
 #### TASK-013: Implement Strategy D train/val/test splitting
 - **Status:** TODO
