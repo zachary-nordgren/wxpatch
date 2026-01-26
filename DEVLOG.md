@@ -1554,3 +1554,156 @@ reconstructed = decode_wind_direction(encoded)
 - TASK-030: Implement reproducibility utilities (seed management)
 - TASK-042: Integrate circular encoding into SAITS model
 - Consider adding von Mises distribution support if CSDI requires it (Phase 3)
+
+## 2026-01-26: TASK-030 - Reproducibility Utilities (Seed Management)
+
+### Status: Completed
+
+**Implementation:**
+Created comprehensive reproducibility utilities for ensuring bit-exact deterministic results across Python, NumPy, and PyTorch random number generators. Essential infrastructure for NFR-006 (bit-exact reproducibility) and TASK-051 (RNG state checkpointing).
+
+**Module Structure (`src/weather_imputation/utils/reproducibility.py`):**
+
+1. **seed_everything(seed, deterministic=True)**
+   - Sets all RNG seeds: Python random, NumPy, PyTorch (CPU + CUDA)
+   - Optional deterministic mode:
+     - `deterministic=True`: Enables PyTorch deterministic algorithms, CuDNN deterministic mode
+     - `deterministic=False`: Allows faster non-deterministic operations
+   - Validates seed range [0, 2^32 - 1]
+   - Configures CuDNN settings (deterministic flag, benchmark flag)
+
+2. **get_rng_state() → dict**
+   - Captures complete RNG state from all sources:
+     - Python random module state
+     - NumPy random state
+     - PyTorch CPU RNG state
+     - PyTorch CUDA RNG states (one per device)
+     - CuDNN deterministic/benchmark flags
+   - Returns dictionary suitable for checkpoint storage
+
+3. **set_rng_state(state: dict)**
+   - Restores previously captured RNG state
+   - Validates state dictionary structure
+   - Handles device count mismatches with warning
+   - Restores CuDNN settings
+
+4. **@make_reproducible decorator**
+   - Ensures decorated functions run with specific seed
+   - Accepts 'seed' keyword argument (default: 42)
+   - Automatically sets deterministic mode
+   - Useful for unit tests and reproducible experiments
+
+**Test Coverage (`tests/test_reproducibility.py`):**
+- 29 comprehensive tests, 27 passing (2 skipped due to CUDA unavailability)
+- Test organization:
+
+1. **TestSeedEverything** (9 tests):
+   - Basic seeding and reproducibility
+   - Different seeds produce different results
+   - Deterministic mode configuration
+   - Invalid seed handling
+   - Boundary seed values (0, 2^32 - 1)
+   - Per-RNG reproducibility (Python, NumPy, PyTorch, CUDA)
+
+2. **TestRNGStateManagement** (7 tests):
+   - State dictionary structure validation
+   - CUDA state list handling
+   - Basic state capture and restoration
+   - Missing keys error handling
+   - Round-trip state preservation
+   - RNG source independence
+   - CuDNN settings preservation
+
+3. **TestMakeReproducibleDecorator** (4 tests):
+   - Basic decorator functionality
+   - Default seed handling
+   - Different seeds produce different results
+   - Multiple arguments support
+
+4. **TestReproducibilityIntegration** (5 tests):
+   - Reproducible data loading simulation (masking)
+   - Reproducible model initialization
+   - Reproducible training step (forward pass + loss)
+   - Reproducible data augmentation
+   - State preservation across epochs
+
+5. **TestEdgeCases** (4 tests):
+   - Multiple consecutive seed_everything calls
+   - Seeding after various operations
+   - State capture without RNG operations
+   - Multi-GPU CUDA state management
+
+**Technical Decisions:**
+- **CONFIDENCE: KNOWN** - Implements NFR-006 from SPEC.md (bit-exact reproducibility)
+- Uses PyTorch's built-in RNG state management APIs
+- Follows PyTorch reproducibility guide recommendations
+- Compatible with checkpoint.py for full training resumption
+- RNG state size can be large (especially CUDA states) - documented in docstrings
+
+**Implementation Details:**
+- `seed_everything()` validates seed range before setting (avoids cryptic errors)
+- CuDNN benchmark mode disabled in deterministic mode (trades speed for reproducibility)
+- `torch.use_deterministic_algorithms(True)` enables full determinism (may fail for some ops)
+- CUDA multi-GPU support: captures/restores state for all devices
+- Device count mismatch handling: warns but continues with available devices
+
+**Key Patterns:**
+- Defensive validation: check seed range, state dictionary structure
+- Graceful degradation: handle missing CUDA gracefully
+- Clear error messages: guide users to fix configuration issues
+- Logging: debug-level logs for troubleshooting reproducibility issues
+
+**Validation Results:**
+- ✓ All 27 tests passing (2 CUDA tests skipped on CPU-only system)
+- ✓ Ruff linting passed (all checks passed)
+- ✓ Type hints complete (compatible with mypy --strict)
+- ✓ Exported in `src/weather_imputation/utils/__init__.py`
+
+**Integration Points:**
+- Will be used by training infrastructure (TASK-044+: Trainer class initialization)
+- Required for TASK-051 (RNG state saving and restoration in checkpoints)
+- Used in data loading (Dataset with reproducible synthetic masking)
+- Supports unit test reproducibility across all modules
+
+**Usage Example:**
+```python
+from weather_imputation.utils.reproducibility import seed_everything, get_rng_state, set_rng_state
+
+# Set all seeds for reproducibility
+seed_everything(42, deterministic=True)
+
+# Training loop with checkpoint recovery
+state = get_rng_state()  # Capture before training
+# ... training code ...
+# On checkpoint load:
+set_rng_state(state)  # Resume from exact RNG state
+```
+
+**Lessons Learned:**
+- PyTorch deterministic mode may raise errors for some operations (e.g., certain CUDA kernels)
+- CuDNN benchmark=True provides significant speedup but sacrifices reproducibility
+- RNG state includes large tensors (CUDA states) - checkpoint storage impact
+- `torch.manual_seed()` sets both CPU and CUDA seeds (convenience)
+- Device count can change between checkpoint save/load (e.g., cloud spot instances)
+
+**Files Modified:**
+- Created: `src/weather_imputation/utils/reproducibility.py` (220 lines)
+- Created: `tests/test_reproducibility.py` (492 lines)
+- Updated: `src/weather_imputation/utils/__init__.py` (added exports)
+- Updated: `TODO.md` (TASK-030 marked DONE)
+- Updated: `DEVLOG.md` (this entry)
+
+**Dependencies:**
+- PyTorch (already in project dependencies)
+- NumPy (already in project dependencies)
+- Python standard library (random, logging)
+
+**Next Steps:**
+- TASK-031: Create preprocessing script (will use seed_everything)
+- TASK-051: Implement RNG state saving/restoration in checkpoint.py
+- TASK-044+: Use seed_everything in Trainer initialization
+- Consider documenting PyTorch determinism limitations (some ops may fail)
+
+**References:**
+- PyTorch Reproducibility Guide: https://pytorch.org/docs/stable/notes/randomness.html
+- SPEC.md NFR-006: "Bit-exact results with same seed"

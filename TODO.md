@@ -223,10 +223,15 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 - **Notes:** Completed 2026-01-26. Implemented comprehensive circular statistics module with sin/cos encoding, circular mean/std, angular difference computation. All 38 tests passing. Ruff checks passing. CONFIDENCE: KNOWN - Implements FR-009 from SPEC.md (circular wind encoding for SAITS/CSDI).
 
 #### TASK-030: Implement reproducibility utilities (seed management)
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run pytest tests/test_reproducibility.py::test_seed_everything -v` passes
 - **Context:** `src/weather_imputation/utils/reproducibility.py`, `tests/test_reproducibility.py`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Implemented comprehensive reproducibility utilities including:
+  - `seed_everything()`: Sets all RNG seeds (Python, NumPy, PyTorch CPU/CUDA) with optional deterministic mode
+  - `get_rng_state()`: Captures complete RNG state from all sources including CuDNN settings
+  - `set_rng_state()`: Restores previously captured RNG state with device count validation
+  - `make_reproducible()`: Decorator for ensuring deterministic function execution
+  Created 29 comprehensive tests covering basic functionality, edge cases, integration scenarios, and multi-device CUDA support. All 27 tests passing (2 skipped due to CUDA unavailability). Ruff checks passing. Implements NFR-006 from SPEC.md (bit-exact reproducibility). Ready for use in training infrastructure (TASK-051: RNG state checkpointing).
 
 ### Integration & Scripts
 
