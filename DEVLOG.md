@@ -4,7 +4,32 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
-## 2026-01-25
+## 2026-01-25 - Documentation Refactoring
+
+**Status:** Completed
+
+**Implementation:**
+- Compacted `CLAUDE.md` from 259 lines to 71 lines
+- Moved architectural details, command reference, and data schemas to `README.md`
+- Restructured `CLAUDE.md` to focus on agent workflow and expectations
+- Updated `README.md` to be comprehensive user-facing documentation with:
+  - Complete directory structure and data flow diagrams
+  - Full command reference for all scripts
+  - Data schemas (GHCNh parquet and metadata v2.0)
+  - Implementation phases overview with status indicators
+  - Implementation guidelines and project resources
+
+**Key Design Decisions:**
+- `CLAUDE.md` now emphasizes: Role → Standard Workflow → Output Format → Constraints → Project Resources
+- Standard workflow front and center: SPEC → TODO (one task) → IN_PROGRESS → Implement → Update TODO/DEVLOG → Commit
+- `README.md` serves as single source for "how to use" and architecture details
+- Both files cross-reference SPEC.md for complete specification
+
+**Confidence:** KNOWN - Standard documentation patterns for agent-human collaboration.
+
+---
+
+## 2026-01-25 - Configuration Infrastructure (v0.3.0)
 
 ### TASK-001: Base Pydantic Configuration Classes
 
@@ -16,31 +41,12 @@ This log tracks implementation progress, decisions, and findings during developm
   - `ExperimentConfig`: Experiment metadata tracking (name, description, seed, tags)
 - Created comprehensive test suite in `tests/test_config.py` (14 tests, all passing)
 - Added PyYAML dependency to `pyproject.toml`
-- Updated `src/weather_imputation/config/__init__.py` to export new classes
 
 **Key Design Decisions:**
-- Used Pydantic v2 `ConfigDict` for model configuration
-- Set `extra="forbid"` to catch configuration errors early
+- Used Pydantic v2 `ConfigDict` with `extra="forbid"` to catch configuration errors early
 - Enabled `validate_assignment=True` for runtime validation
 - Provided both YAML and JSON serialization (YAML preferred for configs)
 - Auto-create parent directories when saving config files
-
-**Test Coverage:**
-- Basic instantiation and defaults
-- Validation errors (missing fields, wrong types, extra fields)
-- Dictionary conversion
-- YAML/JSON serialization and deserialization
-- File I/O roundtrips
-- Parent directory creation
-- Nested configuration support
-- Validation on assignment
-
-**Files Modified:**
-- `src/weather_imputation/config/base.py` (created)
-- `src/weather_imputation/config/__init__.py` (updated exports)
-- `tests/test_config.py` (created)
-- `pyproject.toml` (added pyyaml dependency)
-- `TODO.md` (marked TASK-001 as DONE)
 
 **Confidence:** KNOWN - Standard Pydantic v2 patterns, well-tested implementation.
 
@@ -52,36 +58,21 @@ This log tracks implementation progress, decisions, and findings during developm
 
 **Implementation:**
 - Created `src/weather_imputation/config/data.py` with 5 configuration classes:
-  - `StationFilterConfig`: Quality thresholds for filtering stations (completeness %, years, geographic bounds, gap patterns)
-  - `NormalizationConfig`: Variable normalization settings (zscore/minmax/none, per-station/global, outlier clipping)
-  - `MaskingConfig`: Synthetic gap generation (MCAR/MAR/MNAR/realistic strategies, missing ratio, gap length constraints)
-  - `SplitConfig`: Train/val/test splitting (spatial/temporal/hybrid/simulated strategies, ratio validation)
-  - `DataConfig`: Main configuration aggregating all above configs + Tier 1 variables, windowing, report types
-- Added 17 comprehensive tests to `tests/test_config.py` (all passing)
-- All configs inherit from `BaseConfig` for YAML/JSON serialization
+  - `StationFilterConfig`: Quality thresholds for filtering stations
+  - `NormalizationConfig`: Variable normalization settings (zscore/minmax/none)
+  - `MaskingConfig`: Synthetic gap generation (MCAR/MAR/MNAR/realistic strategies)
+  - `SplitConfig`: Train/val/test splitting (spatial/temporal/hybrid/simulated)
+  - `DataConfig`: Main configuration aggregating all sub-configs
+- Added 17 comprehensive tests (all passing)
 
 **Key Design Decisions:**
-- Tier 1 variables hardcoded as default: temperature, dew_point_temperature, sea_level_pressure, wind_speed, wind_direction, relative_humidity
-- Default completeness threshold: 60% for all variables (adjustable)
-- Default North America geographic bounds: lat (24.0, 50.0), lon (-130.0, -60.0)
+- Tier 1 variables: temperature, dew_point_temperature, sea_level_pressure, wind_speed, wind_direction, relative_humidity
+- Default completeness threshold: 60% for all variables
+- Default North America bounds: lat (24.0, 50.0), lon (-130.0, -60.0)
 - Default window size: 168 hours (1 week), stride: 24 hours
 - Default split strategy: "simulated" (Strategy D from SPEC.md)
-- Default masking strategy: "realistic" (based on observed gap patterns)
-- Validation enforces: completeness 0-100%, ratios sum to 1.0, min < max for ranges/gaps
 
-**Test Coverage:**
-- Default values for all 5 config classes
-- Custom values and overrides
-- Validation errors (invalid enums, out-of-range values, ratio constraints)
-- YAML roundtrip serialization
-- Nested configuration serialization (DataConfig contains 4 sub-configs)
-
-**Files Modified:**
-- `src/weather_imputation/config/data.py` (created, 337 lines)
-- `tests/test_config.py` (added 17 tests, now 31 tests total)
-- `TODO.md` (marked TASK-002 as DONE)
-
-**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 requirements, validates per FR-003 through FR-007.
+**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 requirements.
 
 ---
 
@@ -91,45 +82,23 @@ This log tracks implementation progress, decisions, and findings during developm
 
 **Implementation:**
 - Created `src/weather_imputation/config/model.py` with 6 configuration classes:
-  - `ModelConfig`: Base configuration for all imputation models (model_type, n_variables)
-  - `LinearInterpolationConfig`: Linear interpolation baseline (max_gap_size)
-  - `SplineInterpolationConfig`: Akima spline interpolation (spline_order, max_gap_size)
-  - `MICEConfig`: Multiple Imputation by Chained Equations (n_iterations, n_imputations, predictor_method)
-  - `SAITSConfig`: Self-Attention Imputation for Time Series (n_layers, n_heads, d_model, d_ff, dropout, mit_weight, ort_weight, position encoding, wind encoding, metadata conditioning)
-  - `CSDIConfig`: Conditional Score-based Diffusion Imputation (n_diffusion_steps, noise_schedule, beta_start/end, denoising network architecture, sampling strategy, n_samples)
-- Added 14 comprehensive tests to `tests/test_config.py` (all passing, now 45 tests total)
-- Updated `src/weather_imputation/config/__init__.py` to export new classes
+  - `ModelConfig`, `LinearInterpolationConfig`, `SplineInterpolationConfig`
+  - `MICEConfig`: Multiple Imputation by Chained Equations
+  - `SAITSConfig`: Self-Attention Imputation (n_layers=2, n_heads=4, d_model=128)
+  - `CSDIConfig`: Diffusion Imputation (50 steps, cosine schedule, DDPM sampling)
+- Added 14 comprehensive tests (now 45 tests total)
 
 **Key Design Decisions:**
-- Classical methods (linear, spline, MICE) have minimal hyperparameters (no-train or simple sklearn wrappers)
 - SAITS defaults match paper recommendations: 2 layers, 4 heads, d_model=128, d_ff=512
-- CSDI defaults: 50 diffusion steps (cost vs quality tradeoff), cosine noise schedule, DDPM sampling
-- Circular wind encoding enabled by default for SAITS (sin/cos components)
-- Station metadata conditioning disabled by default (can be enabled for experiments)
-- Cross-field validation using `@model_validator(mode="after")`:
-  - SAITS/CSDI: d_model must be divisible by n_heads (required for multi-head attention)
-  - CSDI: beta_end must be > beta_start (noise schedule monotonicity)
-
-**Test Coverage:**
-- Default values for all 6 model config classes
-- Custom values and overrides
-- Validation errors (invalid enums, out-of-range values, cross-field constraints)
-- YAML roundtrip serialization
-- Comprehensive coverage of SAITS and CSDI hyperparameters
-
-**Files Modified:**
-- `src/weather_imputation/config/model.py` (created, 325 lines)
-- `src/weather_imputation/config/__init__.py` (added model config exports)
-- `tests/test_config.py` (added 14 tests, now 45 tests total)
-- `TODO.md` (marked TASK-003 as DONE)
+- CSDI defaults: 50 diffusion steps, cosine noise schedule
+- Circular wind encoding enabled by default for SAITS
+- Cross-field validation: d_model must be divisible by n_heads
 
 **Lessons Learned:**
-- Pydantic v2 `@model_validator(mode="after")` is required for cross-field validation where both fields are set simultaneously in __init__
-- `@field_validator` with `info.data` doesn't work reliably for cross-field checks due to validation order
-- Test case with d_model=100, n_heads=4 was incorrectly passing because 100 % 4 == 0 (divisible!)
-  - Fixed to use d_model=101 (101 % 4 == 1, not divisible)
+- Pydantic v2 `@model_validator(mode="after")` required for cross-field validation
+- Test case with d_model=100, n_heads=4 passes (100 % 4 == 0) - fixed to d_model=101
 
-**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 model configurations, matches paper specifications for SAITS/CSDI hyperparameters.
+**Confidence:** KNOWN - Implements SPEC.md model configurations, matches paper specifications.
 
 ---
 
@@ -139,54 +108,21 @@ This log tracks implementation progress, decisions, and findings during developm
 
 **Implementation:**
 - Created `src/weather_imputation/config/training.py` with 5 configuration classes:
-  - `OptimizerConfig`: Optimizer settings (type, learning_rate, weight_decay, betas, momentum, gradient clipping)
-  - `SchedulerConfig`: Learning rate scheduler (cosine/plateau/step/onecycle, warmup, patience, decay factors)
-  - `EarlyStoppingConfig`: Early stopping logic (enabled, patience, min_delta, monitor metric, mode)
-  - `CheckpointConfig`: Model checkpointing (save frequency by epochs/minutes, keep_last_n, save_best)
-  - `TrainingConfig`: Main configuration aggregating all sub-configs + batch_size, max_epochs, device, mixed_precision, compile_model
-- Added 17 comprehensive tests to `tests/test_config.py` (all passing, now 62 tests total)
-- Updated `src/weather_imputation/config/__init__.py` to export new classes
+  - `OptimizerConfig`: AdamW with lr=1e-3, weight_decay=1e-4
+  - `SchedulerConfig`: Cosine annealing with 5-epoch warmup
+  - `EarlyStoppingConfig`: Early stopping logic (patience, min_delta)
+  - `CheckpointConfig`: Save every 1 epoch + every 30 minutes (spot preemption resilience)
+  - `TrainingConfig`: Main configuration with batch_size, max_epochs, device
+- Added 17 comprehensive tests (now 62 tests total)
 
 **Key Design Decisions:**
-- Default optimizer: AdamW with lr=1e-3, weight_decay=1e-4 (proven effective for transformers)
-- Default scheduler: Cosine annealing with 5-epoch warmup (smooth convergence)
-- Default gradient clipping: norm=1.0 (prevents instability, especially for CSDI diffusion)
-- Default checkpointing: every 1 epoch + every 30 minutes (NFR-009: spot preemption resilience)
+- Default gradient clipping: norm=1.0 (prevents instability in CSDI diffusion)
 - Keep last 3 checkpoints by default (balance storage vs safety)
-- Mixed precision enabled by default (NFR-004: faster training on modern GPUs)
-- torch.compile disabled by default (stability concerns, can enable for production)
-- Validation enforces at least one checkpoint method enabled (prevent data loss)
-- Cross-field validation for beta coefficients (must be in [0, 1))
+- Mixed precision enabled by default (faster training on modern GPUs)
+- torch.compile disabled by default (stability concerns)
+- Validation enforces at least one checkpoint method enabled
 
-**Implementation Notes:**
-- Used modern Python 3.10+ type annotations: `float | None` instead of `Optional[float]`
-- CheckpointConfig has `@model_validator(mode="after")` to ensure at least one checkpoint method is enabled
-- OptimizerConfig has `@field_validator` for beta validation (both values must be in [0, 1))
-- Supports 5 scheduler types: cosine (default), plateau, step, onecycle, none
-- Supports 3 optimizer types: adamw (default), adam, sgd
-- Monitor metrics for early stopping/checkpointing: val_loss, val_rmse, val_mae, val_r2
-
-**Test Coverage:**
-- Default values for all 5 config classes
-- Custom values and overrides
-- Validation errors (invalid ranges, cross-field constraints)
-- YAML roundtrip serialization
-- Nested configuration serialization (TrainingConfig contains 4 sub-configs)
-- Edge cases (all checkpoint methods disabled, invalid beta coefficients)
-
-**Files Modified:**
-- `src/weather_imputation/config/training.py` (created, 219 lines)
-- `src/weather_imputation/config/__init__.py` (added training config exports)
-- `tests/test_config.py` (added 17 tests, now 62 tests total)
-- `TODO.md` (marked TASK-004 as DONE)
-
-**Lessons Learned:**
-- Pydantic Field validators with `gt=0.0` (greater than) allow exactly 0.0, must use `ge=0.0` (greater or equal) or `gt=0.0` depending on intent
-- For checkpoint frequency, better to validate at least one method enabled rather than setting defaults that could all be zero
-- Modern type hints (`X | None`) are preferred over `Optional[X]` for Python 3.10+
-- Ruff auto-fix handles UP045 (modernize type hints) cleanly
-
-**Confidence:** KNOWN - Directly implements SPEC.md section 3.4 training configuration and NFR-004, NFR-006, NFR-009 requirements. Follows best practices from PyTorch training literature (gradient clipping, mixed precision, warmup).
+**Confidence:** KNOWN - Implements SPEC.md training configuration and NFR-004, NFR-006, NFR-009.
 
 ---
 
@@ -196,60 +132,21 @@ This log tracks implementation progress, decisions, and findings during developm
 
 **Implementation:**
 - Created `src/weather_imputation/config/evaluation.py` with 5 configuration classes:
-  - `MetricConfig`: Point metrics (RMSE, MAE, Bias, R²) and probabilistic metrics (CRPS, calibration, coverage)
-  - `StratificationConfig`: Stratified evaluation by gap length, season, variable, extremes
-  - `StatisticalTestConfig`: Wilcoxon signed-rank test, Bonferroni correction, Cohen's d, bootstrap CI
-  - `DownstreamValidationConfig`: Degree days (heating/cooling/growing) and extreme event detection
-  - `EvaluationConfig`: Main configuration aggregating all sub-configs + output settings
-- Added 14 comprehensive tests to `tests/test_config.py` (all passing, now 76 tests total)
-- Updated `src/weather_imputation/config/__init__.py` to export new classes
+  - `MetricConfig`: RMSE, MAE, Bias, R², CRPS, calibration, coverage
+  - `StratificationConfig`: Gap length, season, variable, extremes
+  - `StatisticalTestConfig`: Wilcoxon, Bonferroni, Cohen's d, bootstrap CI
+  - `DownstreamValidationConfig`: Degree days, extreme event detection
+  - `EvaluationConfig`: Main configuration with output settings
+- Added 14 comprehensive tests (now 76 tests total)
 
 **Key Design Decisions:**
-- Point metrics enabled by default (RMSE, MAE, Bias, R²) - required for all methods
-- Probabilistic metrics disabled by default (CRPS, calibration, coverage) - only for CSDI/ensemble methods
-- All stratification dimensions enabled by default (gap length, season, variable, extremes)
-- Default gap length bins: [1, 6, 24, 72, 168] hours (short, medium, long, very long gaps)
-- Default extreme percentiles: 5th and 95th (standard practice)
-- Default statistical tests: Wilcoxon + Bonferroni + Cohen's d + bootstrap CI (all enabled)
-- Degree days enabled by default (FR-015: SHOULD), extreme events disabled (FR-016: COULD)
-- Default degree day thresholds from meteorology standards (18°C heating/cooling, 10°C growing)
+- Point metrics enabled by default; probabilistic metrics opt-in
+- All stratification dimensions enabled by default
+- Default gap length bins: [1, 6, 24, 72, 168] hours
+- Default degree day thresholds: 18°C heating/cooling, 10°C growing
 - Default output format: parquet (efficient for large result tables)
-- Save predictions and stratified results by default (enables re-analysis without re-running)
 
-**Implementation Notes:**
-- Implements FR-011 through FR-016 from SPEC.md
-- MetricConfig validates confidence levels are in (0, 1) exclusive
-- StratificationConfig validates gap_length_bins are sorted and positive
-- Default n_samples=100 for CSDI probabilistic metrics (balances cost vs uncertainty quality)
-- Default confidence_levels=[0.50, 0.90, 0.95] for prediction intervals
-- Default alpha=0.05 for statistical significance tests (standard p-value threshold)
-- Default n_bootstrap_samples=1000 (sufficient for stable CI estimates)
-- Default heat_wave_threshold=35°C, cold_snap_threshold=-10°C (reasonable for North America)
-- Default event duration=3 days (meteorological definition)
-
-**Test Coverage:**
-- Default values for all 5 config classes
-- Custom values and overrides
-- Validation errors (invalid confidence levels, unsorted bins, out-of-range percentiles)
-- YAML roundtrip serialization
-- Nested configuration serialization (EvaluationConfig contains 4 sub-configs)
-- Edge cases (confidence levels at boundaries, negative gap bins)
-
-**Files Modified:**
-- `src/weather_imputation/config/evaluation.py` (created, 256 lines)
-- `src/weather_imputation/config/__init__.py` (added evaluation config exports)
-- `tests/test_config.py` (added 14 tests, now 76 tests total)
-- `TODO.md` (marked TASK-005 as DONE)
-
-**Lessons Learned:**
-- Pydantic field validators can access the entire list/value and validate element-wise
-- For multi-line field descriptions, use parentheses to wrap the string for better readability
-- Ruff E501 enforces 100 character line limit - use parentheses for long descriptions
-- Configuration classes should provide sensible defaults that work for most use cases
-- Probabilistic metrics should be opt-in (require more compute, only apply to certain models)
-- Stratification dimensions should be opt-out (important for comprehensive evaluation)
-
-**Confidence:** KNOWN - Directly implements SPEC.md section 3.2 (evaluation component), FR-011 through FR-016. Defaults based on meteorological standards and statistical best practices.
+**Confidence:** KNOWN - Implements FR-011 through FR-016 from SPEC.md.
 
 ---
 
@@ -258,49 +155,17 @@ This log tracks implementation progress, decisions, and findings during developm
 **Status:** Completed
 
 **Implementation:**
-- Added `extract_tier1_variables()` function to `src/weather_imputation/data/ghcnh_loader.py`:
-  - Extracts Tier 1 weather variables (6 core variables: temperature, dew_point_temperature, sea_level_pressure, wind_speed, wind_direction, relative_humidity)
-  - Extracts all 6 attributes for each variable: value, Quality_Code, Measurement_Code, Report_Type_Code, Source_Code, units
-  - Includes primary columns: STATION, Station_name, DATE, LATITUDE, LONGITUDE
-  - Handles missing columns gracefully (only includes columns that exist in DataFrame)
-  - Supports extracting all Tier 1 variables (default) or a custom subset
-- Created comprehensive test suite in `tests/test_ghcnh_loader.py` with 11 tests:
-  - Default extraction (all Tier 1 variables)
-  - Subset extraction (specific variables)
-  - Single variable extraction
-  - Missing columns handling
-  - Empty DataFrame handling
-  - No matching columns handling
-  - Data value preservation
-  - Row order preservation
-  - Null value handling
-  - Constants validation (TIER1_VARIABLES, VARIABLE_SUFFIXES)
+- Added `extract_tier1_variables()` to `src/weather_imputation/data/ghcnh_loader.py`
+- Extracts Tier 1 weather variables with all 6 attributes per variable
+- Handles missing columns gracefully
+- Created 11 comprehensive tests
 
 **Key Design Decisions:**
-- Function returns empty DataFrame if no columns match (rather than raising error)
-- Only selects columns that exist in input DataFrame (defensive programming)
-- Uses existing constants TIER1_VARIABLES and VARIABLE_SUFFIXES for consistency
-- Logs warning when no requested columns are found
+- Returns empty DataFrame if no columns match (defensive programming)
+- Only selects columns that exist in input DataFrame
 - Does not modify input DataFrame (pure function)
 
-**Test Coverage:**
-- All 11 tests passing
-- Covers happy path, edge cases, error cases
-- Validates data integrity (values, order, nulls preserved)
-- Validates constants match SPEC.md requirements
-
-**Files Modified:**
-- `src/weather_imputation/data/ghcnh_loader.py` (added extract_tier1_variables function, ~50 lines)
-- `tests/test_ghcnh_loader.py` (created, 259 lines with 11 tests)
-- `TODO.md` (marked TASK-006 as DONE)
-
-**Lessons Learned:**
-- Polars `.select()` naturally handles column subset selection
-- Building column list dynamically allows for missing columns without errors
-- Ruff's SIM300 (Yoda condition) prefers `expected == actual` over `actual == expected`
-- Pre-existing line length violations in file are not blockers for new code
-
-**Confidence:** KNOWN - Implements FR-004 from SPEC.md (6-variable imputation), leverages well-documented GHCNh schema with 6 attributes per variable. Tests validate all requirements.
+**Confidence:** KNOWN - Implements FR-004 from SPEC.md (6-variable imputation).
 
 ---
 
@@ -309,65 +174,24 @@ This log tracks implementation progress, decisions, and findings during developm
 **Status:** Completed
 
 **Implementation:**
-- Created `filter_by_quality_flags()` function in `src/weather_imputation/data/ghcnh_loader.py`:
-  - Filters observations by quality control flags from GHCNh Quality_Code columns
-  - Excludes erroneous values (QC codes 3, 7) by default
-  - Optionally excludes suspect values (QC codes 2, 6) with `exclude_suspect=True`
-  - Sets poor-quality values to null while preserving Quality_Code columns for reference
-  - Works with all Tier 1 variables or a custom subset
-  - Handles missing columns gracefully (only filters columns that exist)
-- Added 13 comprehensive tests to `tests/test_ghcnh_loader.py` (all passing, now 24 tests total):
-  - Default behavior (exclude erroneous codes 3, 7)
-  - Optional suspect exclusion (codes 2, 6)
-  - No exclusions mode (both flags False)
-  - Subset filtering (specific variables)
-  - Quality_Code column preservation
-  - Missing column handling (QC or variable)
-  - Empty DataFrame handling
-  - No matching columns handling
-  - Null handling in Quality_Code and variable columns
-  - DataFrame structure preservation
-  - Numeric quality code casting
+- Created `filter_by_quality_flags()` in `src/weather_imputation/data/ghcnh_loader.py`
+- Filters observations by QC flags (excludes codes 3, 7 by default)
+- Optionally excludes suspect values (codes 2, 6)
+- Sets poor-quality values to null while preserving Quality_Code columns
+- Added 13 comprehensive tests (now 24 tests total)
 
 **Key Design Decisions:**
-- **Null assignment vs row deletion:** Sets values to null rather than deleting rows to preserve temporal continuity and allow analysis of data quality patterns
-- **Quality_Code preservation:** Keeps Quality_Code columns in output for traceability and further analysis
-- **Default to conservative filtering:** Excludes only erroneous codes (3, 7) by default, requiring explicit opt-in for suspect codes (2, 6)
-- **Quality code definitions from GHCNh documentation Section VI:**
-  - Legacy codes for sources 313-346: 0=passed gross limits, 1=passed all checks, 2=suspect, 3=erroneous
-  - Legacy codes for sources 220-223, 347-348: 0=not checked, 1=good, 2=suspect, 3=erroneous
-  - Focus on codes that indicate errors across both systems (3, 7)
-- **Polars conditional expressions:** Uses `pl.when().then().otherwise()` pattern for efficient null assignment
-- **Type casting:** Automatically casts Quality_Code to string for consistent comparisons (handles both string and numeric QC columns)
-
-**Implementation Notes:**
-- Function signature: `filter_by_quality_flags(df, variables=None, exclude_erroneous=True, exclude_suspect=False)`
-- Returns DataFrame with same structure (columns, rows) but poor-quality values set to null
-- Logs info/warning when no columns match or no quality codes to filter
-- Does not modify input DataFrame (pure function)
-- Applies all filter expressions at once using `df.with_columns()` for efficiency
-
-**Test Coverage:**
-- All 13 tests passing (100% of quality filtering tests)
-- Covers happy path, edge cases, error cases
-- Validates data integrity (values, structure, nulls preserved correctly)
-- Validates behavior with different flag combinations
-- Tests both programmatic use cases and defensive error handling
-
-**Files Modified:**
-- `src/weather_imputation/data/ghcnh_loader.py` (added filter_by_quality_flags function, ~60 lines)
-- `tests/test_ghcnh_loader.py` (added 13 tests, now 24 tests total, 485 lines)
-- `TODO.md` (marked TASK-007 as DONE)
+- Sets values to null rather than deleting rows (preserves temporal continuity)
+- Quality_Code preservation for traceability
+- Conservative filtering by default (only erroneous codes 3, 7)
+- Quality code definitions from GHCNh documentation Section VI
 
 **Lessons Learned:**
-- GHCNh has multiple quality code systems depending on data source (sources 313-346 vs 220-223/347-348)
-- Quality codes 3 and 7 consistently indicate erroneous data across different source systems
-- Setting values to null rather than deleting rows is important for preserving temporal structure
-- Polars `pl.when().then().otherwise()` is cleaner than boolean masking for conditional value assignment
-- Polars `.cast(pl.Utf8)` safely handles both string and numeric Quality_Code columns
-- Test naming with descriptive suffixes makes it clear what each test validates
+- GHCNh has multiple quality code systems depending on data source
+- Codes 3 and 7 consistently indicate erroneous data across systems
+- Polars `pl.when().then().otherwise()` cleaner than boolean masking
 
-**Confidence:** KNOWN - Directly implements FR-007 from SPEC.md (quality control filtering). Quality code definitions from official GHCNh documentation Section VI (Table 3). Defensive programming handles real-world data issues (missing columns, nulls, mixed types).
+**Confidence:** KNOWN - Implements FR-007 from SPEC.md (quality control filtering).
 
 ---
 
@@ -376,64 +200,29 @@ This log tracks implementation progress, decisions, and findings during developm
 **Status:** Completed
 
 **Implementation:**
-- Created `src/weather_imputation/data/masking.py` with MCAR masking implementation:
-  - `apply_mcar_mask()`: Generates Missing Completely At Random gaps with uniform probability
-  - `apply_mask()`: Generic dispatcher function for all masking strategies (MCAR/MAR/MNAR/realistic)
-  - Gap-based approach: creates gaps of random length (min_gap_length to max_gap_length)
-  - Targets specified missing_ratio (proportion of missing values)
-  - Supports reproducibility via seed parameter
-- Created comprehensive test suite in `tests/test_masking.py` (17 tests, all passing):
-  - Basic functionality and shape validation
-  - Marginal distribution uniformity (across variables and timesteps)
-  - Different missing ratios (0.1-0.5)
-  - Gap length constraints
-  - Reproducibility and seed handling
-  - Input validation (invalid shapes, ratios, gap lengths)
-  - Edge cases (small sequences, single variable)
-  - Generic apply_mask dispatcher
-  - NotImplementedError placeholders for MAR/MNAR/realistic strategies
-- Updated `src/weather_imputation/data/__init__.py` to export masking functions
-- Added PyTorch (>=2.0.0) and NumPy (>=1.24.0) as dependencies in `pyproject.toml`
+- Created `src/weather_imputation/data/masking.py` with MCAR masking
+- `apply_mcar_mask()`: Generates Missing Completely At Random gaps
+- `apply_mask()`: Generic dispatcher for all masking strategies
+- Gap-based approach with random lengths (min_gap_length to max_gap_length)
+- Added 17 comprehensive tests
 
 **Key Design Decisions:**
-- **Gap-based masking:** Creates contiguous gaps rather than independent point-wise masking to better simulate realistic sensor failures
-- **Per-sample targeting:** Each sample gets approximately missing_ratio of values masked independently
-- **Overlap handling:** Tracks already-missing values to avoid double-counting when gaps overlap
-- **Overshoot prevention:** Limits gap length when approaching target to avoid excessive missing values
-- **High missing ratio handling:** Increases search attempts for observed positions when missing_ratio > 0.5
-- **Practical range focus:** Tests focus on realistic missing ratios (0.1-0.5) rather than extreme values (0.0, 1.0)
-- **Uniform distribution:** MCAR selects variables and timesteps with uniform probability (verified by marginal distribution tests)
+- Gap-based masking (contiguous gaps) rather than point-wise to simulate realistic sensor failures
+- Per-sample targeting: each sample gets approximately missing_ratio masked
+- Overlap handling: tracks already-missing values to avoid double-counting
+- Practical range focus: tests on realistic missing ratios (0.1-0.5)
 
 **Implementation Challenges:**
-- Initial implementation over-counted missing values due to gap overlap issues
-- Single variable case (V=1) required special handling to prevent excessive overlap
-- High missing ratios (>0.7) required more search attempts to find observed positions
-- Balancing accuracy vs practicality: extreme ratios (0.0, 1.0) are hard to hit exactly with gap-based approach
-
-**Test Coverage:**
-- 17 tests covering all aspects of MCAR masking
-- Validates missing ratio accuracy (within 10% tolerance for realistic ratios)
-- Checks uniformity across variables and timesteps (marginal distribution)
-- Verifies reproducibility, input validation, and edge cases
-- Tests generic apply_mask dispatcher with all strategies
-
-**Files Modified:**
-- `src/weather_imputation/data/masking.py` (created, 173 lines)
-- `src/weather_imputation/data/__init__.py` (updated exports)
-- `tests/test_masking.py` (created, 213 lines with 17 tests)
-- `pyproject.toml` (added torch and numpy dependencies)
-- `TODO.md` (marked TASK-008 as DONE)
+- Initial implementation over-counted due to gap overlap
+- Single variable case (V=1) required special handling
+- High missing ratios (>0.7) required more search attempts
 
 **Lessons Learned:**
-- Gap-based masking is more realistic than point-wise masking but requires careful overlap handling
-- Targeting exact missing ratios with variable-length gaps is challenging, especially with single variable or high ratios
-- NumPy's RandomState provides better reproducibility than Python's random module
-- PyTorch boolean masks use True=observed, False=missing (intuitive convention)
-- Test tolerances should reflect algorithm limitations (gap-based approach has inherent variance)
-- For extreme missing ratios (>0.7), the "find observed position" search becomes bottleneck
-- Ruff SIM108 rule prefers ternary operators over simple if-else blocks for assignment
+- Gap-based masking more realistic but requires careful overlap handling
+- PyTorch boolean masks use True=observed, False=missing
+- Test tolerances should reflect algorithm limitations
 
-**Confidence:** KNOWN - Implements FR-005 from SPEC.md (MCAR gap generation strategy). Algorithm based on standard MCAR definition from missing data literature. Extensive test coverage validates correctness.
+**Confidence:** KNOWN - Implements FR-005 from SPEC.md (MCAR gap generation).
 
 ---
 
@@ -442,78 +231,258 @@ This log tracks implementation progress, decisions, and findings during developm
 **Status:** Completed
 
 **Implementation:**
-- Created `apply_mar_mask()` function in `src/weather_imputation/data/masking.py`:
-  - Generates Missing At Random gaps where missingness depends on observed values
-  - Bias towards extreme values: 3x probability when condition variable is extreme
-  - Configurable condition variable (default: 0 = temperature)
-  - Configurable extreme percentile threshold (default: 0.15 = bottom/top 15%)
-  - Gap-based approach with random lengths (min_gap_length to max_gap_length)
-  - Targets specified missing_ratio (proportion of missing values)
-  - Supports reproducibility via seed parameter
-- Updated `apply_mask()` dispatcher to support MAR strategy
-- Created comprehensive test suite in `tests/test_masking.py` (15 new tests, all passing):
-  - Basic functionality and shape validation
-  - Bias towards extreme values validation
-  - Different condition variables (all 6 variables tested)
-  - Different extreme percentiles (0.05-0.30)
-  - Different missing ratios (0.1-0.5)
-  - Reproducibility and seed handling
-  - Input validation (invalid shapes, ratios, gap lengths, condition variable, percentile)
-  - Edge cases (small sequences, single variable, no clear extremes)
-  - Updated dispatcher test (no longer expects NotImplementedError for MAR)
-- Updated `src/weather_imputation/data/__init__.py` to export `apply_mar_mask`
-- Total tests: 32 (17 MCAR + 15 MAR + 3 dispatcher tests)
+- Created `apply_mar_mask()` in `src/weather_imputation/data/masking.py`
+- Generates Missing At Random gaps where missingness depends on observed values
+- 3x probability bias when condition variable is extreme (bottom/top 15% percentiles)
+- Configurable condition variable (default: temperature)
+- Added 15 comprehensive tests (now 32 tests total)
 
 **Key Design Decisions:**
-- **Extreme value conditioning:** Missingness probability is 3x higher when condition variable is in extreme range (bottom/top percentiles)
-  - Rationale: Simulates realistic sensor failure patterns during extreme weather conditions
-  - Extreme probability = 0.75, normal probability = 0.25
-- **Quantile-based thresholds:** Compute extreme thresholds using quantiles across all samples (global statistics)
-  - Lower threshold = percentile (e.g., 15th percentile)
-  - Upper threshold = 1 - percentile (e.g., 85th percentile)
-- **Flexible conditioning:** Can condition on any variable index (0-5 for Tier 1 variables)
-  - Default: variable 0 (temperature) as it's most commonly associated with sensor failures
-- **Graceful degradation:** If no extreme timesteps found, falls back to uniform sampling (with warning)
-- **Gap placement bias:** When placing gaps, preferentially select extreme timesteps with 75% probability
-- **Validation:** Extreme percentile must be in [0.0, 0.5] to ensure meaningful extreme/normal split
+- Extreme probability = 0.75, normal probability = 0.25 (3x bias)
+- Quantile-based thresholds computed globally across all samples
+- Flexible conditioning on any variable (default: temperature)
+- Graceful degradation: falls back to uniform sampling if no extremes found
 
 **Implementation Challenges:**
-- **Balancing bias vs missing ratio:** Need to bias towards extremes while still hitting target missing_ratio
-  - Solution: Use probabilistic selection (75% extreme, 25% normal) rather than exclusive extreme selection
-- **Testing bias quantitatively:** Hard to test exact bias due to randomness and gap overlap
-  - Solution: Test that missing_at_extreme >= missing_at_normal * 0.8 (allow 20% margin)
-  - Focus on relative comparison rather than absolute values
-- **Edge case handling:** When all values are similar (no clear extremes), quantiles may not provide useful thresholds
-  - Solution: Detect when extreme_timesteps is empty, warn, and fall back to uniform sampling
-
-**Test Coverage:**
-- 15 tests covering all aspects of MAR masking
-- Validates missing ratio accuracy (within 15% tolerance - slightly higher than MCAR due to bias)
-- Checks bias towards extreme values (missing_at_extreme >= missing_at_normal * 0.8)
-- Verifies reproducibility, input validation, and edge cases
-- Tests all 6 condition variables and multiple extreme percentiles
-- Updated dispatcher test to verify MAR config works correctly
-
-**Files Modified:**
-- `src/weather_imputation/data/masking.py` (added apply_mar_mask function, ~170 lines)
-- `src/weather_imputation/data/__init__.py` (updated exports)
-- `tests/test_masking.py` (added 15 MAR tests + updated 1 dispatcher test, now 32 tests total, 447 lines)
-- `TODO.md` (marked TASK-009 as DONE)
+- Balancing bias vs missing ratio target
+- Testing bias quantitatively: allow 20% margin (missing_at_extreme >= missing_at_normal * 0.8)
+- Edge case: all values similar (no clear extremes)
 
 **Lessons Learned:**
-- **MAR definition:** Missingness depends on observed values, not on unobserved values (key distinction from MNAR)
-- **Weather context:** Extreme weather conditions are natural conditioning events for MAR in weather data
-  - Temperature extremes often correlate with sensor failures (freezing, overheating)
-  - Wind speed extremes may correlate with physical damage
-  - This makes MAR particularly realistic for weather imputation evaluation
-- **Probabilistic bias:** 3x probability provides strong bias while still allowing some normal-condition gaps
-  - Ensures extreme conditions get more missingness without completely excluding normal conditions
-- **Testing tolerance:** MAR masking needs wider tolerance (15%) than MCAR (10%) due to:
-  - Additional randomness from biased selection
-  - Interaction between extreme value distribution and gap placement
-  - Overlap handling is more complex when gaps cluster at extremes
-- **Quantile computation:** PyTorch's `.quantile()` method works on flattened tensors, providing global statistics
-  - Alternative: per-sample quantiles would create different thresholds per sample
-  - Global quantiles are more consistent and easier to reason about
+- MAR: missingness depends on observed values, not unobserved (key distinction from MNAR)
+- Extreme weather conditions are natural conditioning events for MAR
+- MAR masking needs wider tolerance (15%) than MCAR (10%) due to additional randomness
 
-**Confidence:** KNOWN - Implements FR-005 from SPEC.md (MAR gap generation strategy). MAR definition from missing data literature (Little & Rubin). Extreme value conditioning is realistic for weather sensor failures. All 15 tests passing with comprehensive validation.
+**Confidence:** KNOWN - Implements FR-005 from SPEC.md (MAR gap generation).
+
+---
+
+## 2026-01-20 - Parallel Metadata Computation & Schema Refactoring (v0.2.5-0.2.6)
+
+### Multi-threaded Station Processing
+
+**New Features:**
+- Multi-threaded metadata computation with `--workers` option (default: 4)
+- Uses `ThreadPoolExecutor` for parallel station processing
+- Expected 3-4x speedup for full metadata computation (~4 hours → ~1-1.5 hours)
+
+**Usage:**
+```bash
+uv run python src/scripts/compute_metadata.py compute --workers 8
+```
+
+---
+
+### Metadata Schema v2.0
+
+**Breaking Changes:**
+- Existing metadata files must be recomputed
+- Run: `uv run python src/scripts/compute_metadata.py compute --force`
+
+**Schema Changes:**
+- Column reordering: station identifiers grouped at beginning
+- Statistics columns consolidated into JSON dicts:
+  - `temperature_mean/std/min/max` → `temperature_stats`
+  - `dew_point_mean/std` → `dew_point_stats`
+  - `sea_level_pressure_mean/std/min/max` → `sea_level_pressure_stats`
+- New column: `metadata_schema_version`
+
+**New Features:**
+- Keep stations without hourly records (total_observation_count=0)
+- Summary of hourly vs non-hourly stations in final report
+
+**Bug Fixes:**
+- Fixed ICAO code newline characters (strip whitespace from station inventory)
+- Cleaner progress display (removed per-station warnings)
+
+---
+
+### Cleaning Log and Station Exploration Notebook (v0.2.4)
+
+**New Features:**
+- `--csv` option for `clean_metadata.py` to export cleaned metadata
+- `--log` option to generate detailed human-readable cleaning log
+- `CleaningLog` class for tracking detailed cleaning operations
+- Created `01_station_exploration.py` marimo notebook:
+  - Interactive station filtering with sliders
+  - Histograms (plotly) and geographic maps (folium)
+  - K-Means clustering with configurable features
+  - Export filtered stations to CSV
+- Added `notebooks` optional dependency group
+
+---
+
+## 2026-01-18 - Schema Fixes & Hourly Record Filtering (v0.2.2-0.2.3)
+
+### Schema Inconsistency Fixes
+
+**Bug Fixes:**
+- Fixed Struct-type quality code columns (extract Int32 from Struct)
+- Fixed string-typed numeric columns (cast to Float64 before processing)
+- Fixed quality code type mismatch in is_in() operations
+- Added `_normalize_schema()` to handle schema variations across years
+
+**Internal Changes:**
+- Split `VALID_QUALITY_CODES` into INT and STR variants
+- Added `_normalize_quality_column()` in stats.py
+
+---
+
+### Hourly Record Filtering and Incremental Updates
+
+**New Features:**
+- Hourly record type filtering (excludes FM-12 SYNOP, includes FM-15 METAR, AUTO)
+- Report type counts in metadata (`report_type_counts` field)
+- Incremental metadata updates with `--incremental` flag
+- New functions: `get_station_file_mtime()`, `get_stations_needing_update()`, `compute_all_metadata_incremental()`
+
+**Implementation:**
+- Added `HOURLY_REPORT_TYPES` and `SUMMARY_REPORT_TYPES` constants
+- Metadata includes `total_records_all_types` and `records_excluded_by_filter`
+- Incremental mode compares file mtime against `metadata_computed_at` timestamp
+
+---
+
+### Metadata Fixes and Station Inventory Integration (v0.2.1)
+
+**Bug Fixes:**
+- Fixed DATE column parsing (parse ISO string to datetime)
+- Fixed column name mismatches (handle mixed-case variants)
+- Fixed file naming convention (GHCNh_{station_id}_{year}.parquet)
+- Fixed station list CSV parsing (schema overrides for mixed-type columns)
+- Fixed schema mismatch in multi-year concat (diagonal_relaxed mode)
+
+**New Features:**
+- NOAA Station Inventory integration
+- `download_station_list()`: Download official GHCNh station list
+- `enrich_metadata_from_station_list()`: Fill missing lat/lon/elevation, add WMO ID and ICAO code
+
+---
+
+## 2026-01-18 - Architecture Migration (v0.2.0)
+
+### Complete Architecture Migration to GHCNh Parquet
+
+**Breaking Changes:**
+- Removed ~2,600 lines of legacy ISD tar.gz-based code
+- New package structure under `src/weather_imputation/`
+
+**Removed Legacy Code:**
+- ISD tar.gz downloader, processor, CSV merger
+- SQLite-based metadata manager
+- Legacy utilities and configuration
+
+**New Package Structure:**
+```
+src/
+├── weather_imputation/
+│   ├── config/         # paths.py, download.py
+│   ├── data/           # ghcnh_loader.py, metadata.py, stats.py, cleaning.py
+│   ├── models/         # base.py, classical/
+│   ├── training/       # trainer.py, callbacks.py, checkpoint.py
+│   ├── evaluation/     # metrics.py, statistical.py, stratified.py
+│   └── utils/          # progress.py, parsing.py, filesystem.py, system.py
+└── scripts/            # ghcnh_downloader.py, compute_metadata.py, clean_metadata.py
+```
+
+**Key Changes:**
+- Parquet files kept separate by station/year (no merging)
+- SQLite metadata → Parquet metadata with cleaning/deduplication
+- tqdm → rich.progress for all progress display
+- `uv` for dependency locking
+
+---
+
+### New CLI Scripts
+
+**compute_metadata.py:**
+- Compute station metadata from parquet files
+- Commands: compute, show, stats
+- Supports year filtering and parallel processing
+
+**clean_metadata.py:**
+- Clean and deduplicate station metadata
+- Commands: clean, duplicates, validate, report
+- Features: duplicate detection/merging, coordinate lookup/validation, name normalization
+
+---
+
+### Imputation Framework (Scaffolding)
+
+- BaseImputer protocol for consistent imputation interface
+- Classical imputers: LinearInterpolation, AkimaSpline, MICE
+- Training infrastructure: Trainer, callbacks, checkpoint management
+- Evaluation framework: RMSE, MAE, R², CRPS metrics, stratified analysis
+
+---
+
+## 2026-01-18 - GHCNh Parquet Downloader (v0.1.x)
+
+### Initial Downloader
+
+**New Features:**
+- GHCNh (Global Historical Climatology Network hourly) data downloader
+- Downloads individual station parquet files from NOAA S3-style API
+- Data spans 1790 to present (237 years available)
+- Filters to North America by default (US, CA, MX, RQ, VQ)
+
+**Script: ghcnh_downloader.py**
+- Downloads to `data/raw/ghcnh/{year}/` structure
+- Supports year ranges: `--year 2020:2024` or `--year 2020,2022,2024`
+- Automatic retries with exponential backoff
+- Resume/restart capability via `.download_state.json`
+- Rich progress bars with bandwidth estimates
+- Concurrent downloads (default: 12)
+
+**Commands:**
+- `--inventory`: Display station counts by country
+- `--audit --fix`: Verify downloads and re-download corrupted files
+- `--clean --delete`: Remove corrupted/non-matching files
+- `--status`: Show download progress
+- `--force`: Force re-download
+
+---
+
+### Downloader Enhancements
+
+**Improvements:**
+- Automatic retry queue for failed downloads (second pass after main download)
+- Improved progress bar display (narrower format, shows concurrent downloads)
+- File logging to `src/ghcnh_downloader.log`
+- Simplified concurrency control (semaphore-based)
+- Actual download result reporting for `--audit --fix`
+
+**Clean Feature:**
+- Identifies corrupted files (size mismatch)
+- Identifies files not matching station filter
+- Dry-run by default, use `--delete` to actually delete
+
+---
+
+## Implementation Notes
+
+### Error Handling
+- All scripts use Rich console for formatted error messages
+- Data loading functions return Result types or raise descriptive exceptions
+- Multi-threaded operations use thread-safe progress bars
+
+### Logging Strategy
+- Aggregate log data into structured objects before emission
+- Use Rich Console for user-facing messages
+- Avoid piecemeal logging that interleaves with progress bars
+
+### Testing Guidelines
+- Tests use pytest with descriptive test names
+- Mock external dependencies where appropriate
+- Use fixtures in conftest.py for common test data
+
+### Configuration Pattern
+- Pydantic models for all configuration (type-safe, validated)
+- YAML configs in `configs/` directory
+- Configs compose via inheritance (base → experiment-specific)
+
+### Performance Considerations
+- Use Polars lazy evaluation where possible
+- Default to 4 workers for parallel metadata computation
+- Parquet format for all intermediate/final data files
+- Profile before optimizing - metadata computation is I/O bound

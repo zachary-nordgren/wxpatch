@@ -1,259 +1,329 @@
-# NOAA Weather Data Processor
+# Weather Data Imputation Research Framework
 
-## Overview
+A Python-based research framework for multi-variable weather imputation using NOAA GHCNh (Global Historical Climatology Network hourly) data. Implements classical baselines (linear, spline, MICE) and modern deep learning methods (SAITS attention-based, CSDI diffusion-based) with rigorous evaluation.
 
-This project downloads and processes NOAA Global Hourly weather data to create a complete, accurate historical weather dataset for the continental USA. It downloads compressed archives from NOAA's servers, extracts station data, merges observations chronologically, and maintains comprehensive metadata including data quality metrics and statistics.
-
-## Features
-
-- **Efficient Processing**: Optimized with Polars for fast CSV/Parquet operations
-- **Multi-threaded Processing**: Parallel processing for improved performance
-- **Smart Updates**: Only downloads/processes new or updated files
-- **Comprehensive Metadata**: Tracks station metadata, observation counts, data completeness, statistics, and quality metrics
-- **Multiple Formats**: Supports both CSV.gz and Parquet formats
-- **Data Quality Metrics**: Computes completeness percentages, statistics, gap analysis, and more
-- **Automated Updates**: Simple command to update dataset from end of current data to present
-- **Dataset Merging**: Tools to combine multiple merged datasets
-- **Robust Error Handling**: Recovery mechanisms and validation
-
-## Requirements
-
-- Python 3.8+
-- Required packages: `requests`, `tqdm`, `polars`
-- Optional packages:
-  - `psutil`: System resource checking
-
-## Installation
+## Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/noaa-weather-processor.git
-cd noaa-weather-processor
-
-# Set up virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
 # Install dependencies
-pip install requests tqdm polars
-pip install psutil  # Optional but recommended
+uv sync
+
+# Download GHCNh data
+uv run python src/scripts/ghcnh_downloader.py
+
+# Compute station metadata
+uv run python src/scripts/compute_metadata.py compute
+
+# Clean metadata
+uv run python src/scripts/clean_metadata.py clean
+
+# Explore stations interactively
+uv run marimo edit notebooks/01_station_exploration.py
 ```
 
-## Usage
+## Project Overview
 
-### Basic Workflows
+This framework addresses how researchers can systematically compare classical and deep learning imputation methods on real-world hourly weather data within a $100-300 compute budget. It processes 3,000-6,000 North American weather stations from GHCNh parquet files and evaluates 5 imputation methods with statistical significance testing and downstream validation.
 
-#### 1. Initial Setup - Process All Data
+See **[SPEC.md](SPEC.md)** for complete project specification, requirements, architecture, and technical decisions.
 
-```bash
-# Download and process all available data
-python src/main.py
+## Tech Stack
 
-# Process newest years first (faster to see recent data)
-python src/main.py --newest-first
-
-# With more workers for faster processing
-python src/main.py --max-workers 20
-```
-
-#### 2. Update Existing Dataset
-
-```bash
-# Automatically update from end of current data to present
-python src/update_dataset.py
-
-# Update without computing statistics (faster)
-python src/update_dataset.py --no-stats
-
-# Update with custom merged directory
-python src/update_dataset.py --merged-dir data/merged-combined
-```
-
-#### 3. Combine Multiple Datasets
-
-```bash
-# Combine two merged datasets (e.g., merged/ and merged-1/)
-python src/combine_datasets.py
-
-# Combine and output as Parquet format (better performance)
-python src/combine_datasets.py --parquet
-
-# Custom directories
-python src/combine_datasets.py --merged-dir data/merged --merged1-dir data/merged-1 --output-dir data/merged-combined
-```
-
-### Main Script Options
-
-```bash
-# Basic usage - download and process everything
-python src/main.py
-
-# Just download the archives without processing
-python src/main.py --download-only
-
-# Process archives already downloaded without getting new ones
-python src/main.py --process-only
-
-# Only process specific years (comma-separated, ranges with colon)
-python src/main.py --year-filter 2020,2021,2022
-python src/main.py --year-filter 2010:2015,2020  # 2010-2015 inclusive, plus 2020
-
-# Process newest years first (default is oldest first)
-python src/main.py --newest-first
-
-# Sort everything chronologically when done
-python src/main.py --sort-chronologically
-
-# Update observation counts in metadata
-python src/main.py --update-counts
-
-# Try to fix corrupted metadata file
-python src/main.py --recover-metadata
-
-# Control parallelism (default is 14)
-python src/main.py --max-workers 20
-
-# Logging options
-python src/main.py --verbose  # More logging details
-python src/main.py --quiet    # Less logging details
-```
-
-## How It Works
-
-1. **Downloading**: Gets NOAA archive files (yearly `.tar.gz` files) from the FTP server
-2. **Extraction**: Pulls out station data files from the archives using producer/consumer pattern
-3. **Processing**: 
-   - Merges station data chronologically using Polars
-   - Separates metadata from observation data
-   - Deduplicates records
-   - Optimized to read/write directly without intermediate string conversions
-4. **Storage**: 
-   - Compresses merged station data (CSV.gz or Parquet)
-   - Maintains SQLite metadata database with comprehensive statistics
-   - Exports metadata to CSV for compatibility
+- **Language:** Python 3.10+ with type hints (mypy strict mode)
+- **Data Processing:** Polars (5-10x faster than Pandas, lazy evaluation)
+- **Deep Learning:** PyTorch 2.0+ (torch.compile, SDPA)
+- **Notebooks:** Marimo (reactive, git-friendly pure Python files)
+- **CLI:** Typer (type-safe command-line interfaces)
+- **Configuration:** Pydantic v2 (type-validated YAML/JSON)
+- **Testing:** pytest with descriptive test names
+- **Build Tool:** uv (10-100x faster than pip)
+- **Linting:** Ruff (Rust-based, auto-fix)
+- **Cloud:** SkyPilot (multi-cloud spot instances with auto-recovery)
+- **Tracking:** Weights & Biases (experiment logging, artifact storage)
 
 ## Directory Structure
 
 ```
-data/
-  ├── raw/                    # Downloaded .tar.gz archives from NOAA
-  ├── merged/                  # Processed station data
-  │   ├── wx_metadata.db      # SQLite database with comprehensive metadata
-  │   ├── wx_info.csv         # Station metadata and observation counts (CSV export)
-  │   └── *.csv.gz            # Individual compressed station data files
-  ├── merged-1/               # Alternative merged dataset (if applicable)
-  ├── merged-combined/        # Combined datasets (from combine_datasets.py)
-  └── temp/                   # Temporary files during processing
+.
+├── src/
+│   ├── weather_imputation/          # Main package
+│   │   ├── config/                  # Configuration management
+│   │   │   ├── paths.py             # Directory and file path constants
+│   │   │   └── download.py          # Download settings and URLs
+│   │   ├── data/                    # Data loading and processing
+│   │   │   ├── ghcnh_loader.py      # Load/filter GHCNh parquet files
+│   │   │   ├── metadata.py          # Compute station metadata
+│   │   │   ├── stats.py             # Statistical calculations
+│   │   │   ├── cleaning.py          # Deduplication, coordinate validation
+│   │   │   ├── masking.py           # Synthetic gap generation (TODO)
+│   │   │   ├── normalization.py     # Per-station z-score (TODO)
+│   │   │   ├── dataset.py           # PyTorch datasets (TODO)
+│   │   │   └── splits.py            # Train/val/test splitting (TODO)
+│   │   ├── models/                  # Imputation models
+│   │   │   ├── base.py              # BaseImputer protocol
+│   │   │   ├── classical/           # Linear, spline, MICE (TODO)
+│   │   │   ├── attention/           # SAITS (TODO)
+│   │   │   └── diffusion/           # CSDI (TODO)
+│   │   ├── training/                # Training infrastructure (TODO)
+│   │   │   ├── trainer.py           # Training loop
+│   │   │   ├── callbacks.py         # W&B logging, checkpointing
+│   │   │   └── checkpoint.py        # Checkpoint management
+│   │   ├── evaluation/              # Evaluation framework (TODO)
+│   │   │   ├── metrics.py           # RMSE, MAE, R², CRPS
+│   │   │   ├── statistical.py       # Significance tests
+│   │   │   └── stratified.py        # Gap-length, seasonal analysis
+│   │   └── utils/                   # Utilities
+│   │       ├── progress.py          # Rich progress bars
+│   │       ├── parsing.py           # Year/station filter parsing
+│   │       ├── filesystem.py        # Directory operations
+│   │       └── system.py            # Resource checks
+│   └── scripts/                     # CLI entry points
+│       ├── ghcnh_downloader.py      # Download GHCNh parquet files
+│       ├── compute_metadata.py      # Compute station metadata
+│       ├── clean_metadata.py        # Clean/deduplicate metadata
+│       ├── preprocess.py            # Data preprocessing (TODO)
+│       ├── train.py                 # Model training (TODO)
+│       └── evaluate.py              # Model evaluation (TODO)
+├── data/                            # Data files (gitignored)
+│   ├── raw/ghcnh/                   # Downloaded parquet files by year
+│   └── processed/                   # Computed metadata files
+├── notebooks/                       # Marimo reactive notebooks
+│   ├── 01_station_exploration.py    # Interactive station filtering
+│   ├── 02_data_quality.py           # Quality analysis (TODO)
+│   ├── 03_model_comparison.py       # Model training notebook (TODO)
+│   └── 04_results_analysis.py       # Publication figures (TODO)
+├── tests/                           # Test suite (TODO: most tests)
+├── configs/                         # YAML configurations (TODO)
+├── checkpoints/                     # Trained model checkpoints (TODO)
+├── results/                         # Evaluation outputs (TODO)
+└── sky/                             # SkyPilot cloud configs (TODO)
 ```
 
-## Metadata
+## Data Flow
 
-The system maintains comprehensive metadata for each station:
+### 1. Setup Phase
+```
+ghcnh_downloader.py → data/raw/ghcnh/{year}/{station}.parquet
+compute_metadata.py → data/processed/metadata.parquet
+clean_metadata.py   → data/processed/metadata_cleaned.parquet
+```
 
-### Basic Metadata
-- Station ID, name, location (latitude, longitude, elevation)
-- Call sign
+### 2. Exploration Phase
+```
+metadata_cleaned.parquet → 01_station_exploration.py (Marimo)
+User adjusts thresholds → selected_stations.json
+```
 
-### Temporal Coverage
-- First and last observation dates
-- Total observation count
-- Year-by-year observation counts
+### 3. Preprocessing Phase (TODO)
+```
+preprocess.py:
+  - Load selected_stations.json
+  - For each station: load multi-year data → filter → normalize
+  - Apply train/val/test splits (Strategy D: simulated masks)
+  - Save: train.parquet, val.parquet, test.parquet
+```
 
-### Data Quality Metrics
-- **Completeness**: Percentage of observations with data for each variable (TMP, DEW, SLP, WND, VIS, CIG)
-- **Statistics**: Mean, std dev, min, max for temperature, dewpoint, and pressure
-- **Gap Analysis**: Number of significant gaps (>24 hours) and maximum gap duration
-- **Observation Frequency**: Average hours between observations
-- **Timezone**: Approximate timezone based on longitude
+### 4. Training Phase (TODO)
+```
+train.py:
+  - Load config (model + training hyperparameters)
+  - Initialize Dataset, DataLoader, Model (SAITS/CSDI)
+  - Trainer.train() → checkpoints/exp_{id}/checkpoint_epoch_N.pt
+  - Log to W&B: loss curves, val metrics
+```
 
-This metadata is essential for:
-- **Model Training**: Understanding data quality for imputation models
-- **Data Validation**: Identifying stations with gaps or low quality
-- **Feature Engineering**: Using station-specific statistics for normalization
-- **Quality Assessment**: Understanding which variables are reliable for each station
+### 5. Evaluation Phase (TODO)
+```
+evaluate.py:
+  - Load checkpoint → model.load()
+  - Compute predictions on test set
+  - Compute metrics (point + probabilistic + stratified)
+  - Statistical tests → results/comparison_table.csv
+```
 
-## Performance Optimizations
+### 6. Publication Phase (TODO)
+```
+04_results_analysis.py (Marimo):
+  - Generate publication-quality figures
+  - Export notebook → notebooks/exports/results_YYYYMMDD.html
+```
 
-The codebase has been optimized for performance:
+## Command Reference
 
-- **Direct Polars I/O**: Reads/writes directly from gzip files without intermediate strings
-- **Lazy Evaluation**: Uses Polars efficiently to minimize memory usage
-- **Reduced I/O**: Eliminates redundant file reads
-- **Parquet Support**: Optional Parquet format for 10-100x faster reads/writes
-
-Expected performance improvements:
-- **2-5x faster** processing with current optimizations
-- **10-100x faster** with Parquet format (when implemented)
-
-## Common Workflows
-
-### Workflow 1: Initial Data Processing
+### Data Pipeline
 
 ```bash
-# 1. Download and process all data (this takes a while!)
-python src/main.py --newest-first
+# Download GHCNh parquet files
+uv run python src/scripts/ghcnh_downloader.py                    # All years, North America
+uv run python src/scripts/ghcnh_downloader.py --year 2024        # Specific year
+uv run python src/scripts/ghcnh_downloader.py --year 2020:2024   # Year range
+uv run python src/scripts/ghcnh_downloader.py --all-stations     # Global (not just NA)
+uv run python src/scripts/ghcnh_downloader.py --status           # Show download status
 
-# 2. Sort all files chronologically
-python src/main.py --sort-chronologically
+# Compute station metadata
+uv run python src/scripts/compute_metadata.py compute            # All stations
+uv run python src/scripts/compute_metadata.py compute --workers 8  # Parallel (default: 4)
+uv run python src/scripts/compute_metadata.py compute --years 2023,2024  # Specific years
+uv run python src/scripts/compute_metadata.py show               # Display metadata
+uv run python src/scripts/compute_metadata.py stats              # Show statistics
 
-# 3. Update observation counts
-python src/main.py --update-counts
+# Clean metadata (deduplication, coordinate validation)
+uv run python src/scripts/clean_metadata.py clean                # Full cleaning pipeline
+uv run python src/scripts/clean_metadata.py clean --dry-run      # Preview changes
+uv run python src/scripts/clean_metadata.py duplicates           # List duplicates
+uv run python src/scripts/clean_metadata.py validate             # Validate coordinates
+uv run python src/scripts/clean_metadata.py report               # Show cleaning report
 ```
 
-### Workflow 2: Combining Two Datasets
+### Notebooks
 
 ```bash
-# Combine merged/ and merged-1/ into merged-combined/
-# This also computes statistics for all stations
-python src/combine_datasets.py --parquet
+# Interactive station exploration (filtering, clustering)
+uv run marimo edit notebooks/01_station_exploration.py
+
+# Run notebook in read-only mode
+uv run marimo run notebooks/01_station_exploration.py
 ```
 
-### Workflow 3: Regular Updates
+### Development
 
 ```bash
-# Update from end of current data to present
-# Automatically determines what's needed
-python src/update_dataset.py
+# Code quality
+uv run ruff check src/            # Linting
+uv run ruff check src/ --fix      # Auto-fix issues
+uv run mypy src/                  # Type checking
+uv run pytest tests/              # Run tests
+
+# Dependencies
+uv sync                           # Sync all dependencies
+uv sync --group dev               # Include dev dependencies
+uv sync --group notebooks         # Include notebook dependencies
+uv add <package>                  # Add new dependency
 ```
 
-### Workflow 4: Processing Specific Years
+## Data Schemas
 
-```bash
-# Download and process only 2024 and 2025
-python src/main.py --year-filter 2024,2025
+### GHCNh Parquet Schema
 
-# Or just download
-python src/main.py --year-filter 2024,2025 --download-only
+Each station parquet file contains:
+- **234 columns total**: STATION, Station_name, DATE, LATITUDE, LONGITUDE + 38 weather variables
+- **Weather variables** (38 × 6 attributes each):
+  - Core variables: `temperature`, `dew_point_temperature`, `sea_level_pressure`, `wind_direction`, `wind_speed`, `relative_humidity`
+  - Extended variables: `visibility`, `wind_gust`, `precipitation`, `snow_depth`, etc.
+  - Each variable has: `value`, `Quality_Code`, `Measurement_Code`, `Report_Type_Code`, `Source_Code`, `units`
 
-# Then process later
-python src/main.py --year-filter 2024,2025 --process-only
-```
+### Metadata Schema v2.0
 
-## Notes
+**Station Identifiers:**
+- `station_id`, `country_code`, `station_name`, `latitude`, `longitude`, `elevation`
+- `state`, `wmo_id`, `icao_code` (from NOAA inventory)
 
-- **Performance**: Setting `--max-workers` too high will use excessive memory. Default (14) is usually optimal.
-- **Disk Space**: You need about 30-50GB disk space per decade of data (raw + processed)
-- **First Run**: The first run takes a long time (hours to days depending on data volume)
-- **Updates**: Later updates are much faster, only processing new data
-- **Parquet**: Consider using Parquet format for better performance, especially for model training
-- **Statistics**: Computing statistics adds time but provides valuable metadata for analysis
+**Temporal Coverage:**
+- `first_observation`, `last_observation`, `years_available`
+- `total_observation_count`, `year_counts` (JSON dict)
 
-## Troubleshooting
+**Data Quality:**
+- Completeness percentages: `temperature_completeness_pct`, `dew_point_completeness_pct`, etc.
+- Statistics as JSON dicts: `temperature_stats`, `dew_point_stats`, `sea_level_pressure_stats`
+- Gap analysis: `gap_count_24h`, `max_gap_duration_hours`, `avg_observation_interval_hours`
 
-### Metadata Database Issues
+**Data Source:**
+- `report_type_counts` (JSON), `total_records_all_types`, `records_excluded_by_filter`
 
-```bash
-# Try to recover corrupted metadata
-python src/main.py --recover-metadata
-```
+See [SPEC.md §3.4](SPEC.md#34-data-model) for complete schema definitions.
 
-### Processing Errors
+## Implementation Phases
 
-- Check the log file: `src/weather_data_processing.log`
-- Reduce `--max-workers` if running out of memory
-- Use `--verbose` for more detailed error messages
+The project is organized into 4 phases over 12 weeks (part-time). See **[TODO.md](TODO.md)** for complete task backlog with priorities.
 
-### Update Issues
+### Phase 1: Foundation (Weeks 1-3) - 35 tasks
+- ✅ Data download infrastructure (GHCNh parquet files)
+- ✅ Metadata computation with parallel processing
+- ✅ Metadata cleaning (deduplication, coordinate validation)
+- ✅ Interactive station exploration notebook
+- 🚧 Pydantic configuration classes
+- 🚧 Data pipeline (masking, normalization, PyTorch datasets)
+- 🚧 Classical baselines (linear, spline, MICE)
+- 🚧 Evaluation framework (RMSE, MAE, R², stratified metrics)
 
-- If `update_dataset.py` can't find latest date, it will check station files (slower but works)
-- Use `--no-stats` to skip statistics computation if it's taking too long
+### Phase 2: SAITS Implementation (Weeks 4-6) - 24 tasks
+- SAITS architecture (DMSA, position encoding, MIT/ORT loss)
+- Training infrastructure (Trainer, callbacks, checkpointing)
+- Weather-specific adaptations (circular wind encoding, metadata conditioning)
+- Local validation, hyperparameter search
+
+### Phase 3: CSDI Implementation (Weeks 7-9) - 15 tasks
+- CSDI diffusion model (noise schedule, denoising network)
+- Probabilistic evaluation (CRPS, calibration)
+- Full-scale cloud training with SkyPilot
+
+### Phase 4: Full Evaluation (Weeks 10-12) - 21 tasks
+- Statistical analysis (Wilcoxon, Bonferroni, Cohen's d)
+- Downstream validation (degree days, extreme events)
+- Publication-ready results and documentation
+
+## Implementation Guidelines
+
+### Error Handling
+- All scripts use Rich console for formatted error messages
+- Data loading functions raise descriptive exceptions with context
+- Multi-threaded operations use thread-safe progress bars
+- Aggregate log data into structured objects before emission (see [SPEC.md §5.2](SPEC.md#52-logging-strategy))
+
+### Testing
+- Tests use pytest with descriptive test names (`test_mcar_masking_preserves_marginal_distribution`)
+- Mock external dependencies (NOAA downloads, W&B API, file I/O where appropriate)
+- Use fixtures in `conftest.py` for reusable test data
+- Tests mirror source structure: `tests/test_data/test_masking.py`
+
+### Configuration Pattern
+- Pydantic models for all configuration (type-safe, validated)
+- YAML configs in `configs/` directory
+- Configs compose via inheritance (base → experiment-specific)
+
+### Performance
+- Use Polars lazy evaluation where possible
+- Default to 4 workers for parallel metadata computation (configurable)
+- Parquet format for all intermediate/final data files
+- Profile before optimizing - metadata computation is I/O bound
+
+## Project Status
+
+**Completed:**
+- ✅ Data download infrastructure
+- ✅ Metadata computation (v2.0 schema)
+- ✅ Metadata cleaning
+- ✅ Station exploration notebook
+
+**In Progress:**
+- 🚧 Phase 1 foundation tasks (configuration, data pipeline, baselines)
+
+**Not Started:**
+- ⬜ Phase 2-4 tasks (SAITS, CSDI, full evaluation)
+- ⬜ Test suite (most tests are TODO)
+- ⬜ Cloud training infrastructure
+
+## Resources
+
+### Documentation
+- **[SPEC.md](SPEC.md)** - Complete project specification (requirements, architecture, API contracts)
+- **[TODO.md](TODO.md)** - Task backlog with 100 tasks across 4 phases
+- **[DEVLOG.md](DEVLOG.md)** - Development log with dated entries
+- **[CLAUDE.md](CLAUDE.md)** - Agent context and workflow
+- **[docs/ghcnh_DOCUMENTATION.pdf](docs/ghcnh_DOCUMENTATION.pdf)** - Official NOAA data format
+
+### Papers
+- **SAITS:** Du et al. (2023) "SAITS: Self-Attention-based Imputation for Time Series" ([arXiv](https://arxiv.org/abs/2202.08516))
+- **CSDI:** Tashiro et al. (2021) "CSDI: Conditional Score-based Diffusion Models for Probabilistic Time Series Imputation" ([NeurIPS](https://arxiv.org/abs/2107.03502))
+- **MICE:** van Buuren & Groothuis-Oudshoorn (2011) "mice: Multivariate Imputation by Chained Equations in R" ([JSS](https://www.jstatsoft.org/article/view/v045i03))
+
+### External Links
+- **NOAA GHCNh Parquet Files:** [S3 Bucket](https://noaa-ghcn-pds.s3.amazonaws.com/index.html)
+- **Marimo:** [marimo.io](https://marimo.io)
+- **Pydantic:** [docs.pydantic.dev](https://docs.pydantic.dev/latest/)
+- **SkyPilot:** [skypilot.readthedocs.io](https://skypilot.readthedocs.io)
+- **Weights & Biases:** [docs.wandb.ai](https://docs.wandb.ai)
+
+## License
+
+[Specify license here]
