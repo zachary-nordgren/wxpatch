@@ -35,7 +35,7 @@ A Python-based research framework for multi-variable weather imputation using th
 | FR-004 | Implement 6-variable imputation (temp, dewpoint, pressure, wind speed/dir, humidity) | MUST | Tier 1 variables from plan |
 | FR-005 | Support 4 gap generation strategies (MCAR, MAR, MNAR, realistic) | MUST | For controlled evaluation |
 | FR-006 | Implement train/val/test splits (4 strategies: spatial, temporal, hybrid, simulated) | MUST | Strategy D preferred |
-| FR-007 | Normalize variables per-station (z-score or min-max) | MUST | Required for neural methods |
+| FR-007 | Normalize variables globally across training set (z-score or min-max) | MUST | Required for neural methods |
 | FR-008 | Implement classical baselines: linear, spline (Akima), MICE | MUST | Comparison anchors |
 | FR-009 | Implement SAITS with weather adaptations (circular wind encoding, metadata conditioning) | MUST | Primary deep learning method |
 | FR-010 | Implement CSDI for probabilistic imputation | MUST | Uncertainty quantification |
@@ -116,7 +116,7 @@ The framework operates as a standalone research pipeline consuming public GHCNh 
 | **data.metadata** | Compute completeness, gaps, temporal coverage | `compute_metadata(station_files) → StationMetadata` |
 | **data.dataset** | PyTorch Dataset for windowed time series with masks | `__getitem__(idx) → (observed, mask, target)` |
 | **data.masking** | Generate synthetic gaps (MCAR/MAR/MNAR) | `apply_mask(data, strategy) → masked_data` |
-| **data.normalization** | Per-station z-score normalization | `fit(data) → Normalizer`, `transform()`, `inverse_transform()` |
+| **data.normalization** | Global z-score/min-max normalization across training set | `fit(data, mask) → Normalizer`, `transform()`, `inverse_transform()` |
 | **data.splits** | Train/val/test splitting strategies | `split(metadata, strategy) → (train_ids, val_ids, test_ids)` |
 | **models.base** | BaseImputer protocol (fit/impute/save/load) | Common interface for all methods |
 | **models.classical** | Linear, spline, MICE implementations | `impute(observed, mask) → Tensor` |
@@ -144,16 +144,20 @@ The framework operates as a standalone research pipeline consuming public GHCNh 
 3. PREPROCESSING PHASE
    preprocess.py:
      - Load selected_stations.json
-     - For each station: load multi-year parquet → quality filter → normalize
+     - For each station: load multi-year parquet → quality filter
      - Compute train/val/test splits (Strategy D: simulated masks)
-     - Save: data/processed/train.parquet, val.parquet, test.parquet
+     - Save: data/processed/train.parquet, val.parquet, test.parquet (raw data, NOT normalized)
 
 4. TRAINING PHASE (local or cloud)
    train.py:
      - Load config (model + training hyperparameters)
-     - Initialize Dataset, DataLoader
+     - Load train.parquet → convert to PyTorch tensors
+     - Fit global Normalizer on ALL training data (computes mean/std across all stations)
+     - Apply normalization to train/val data
+     - Initialize Dataset, DataLoader (with normalized tensors)
      - Initialize Model (SAITS or CSDI)
      - Trainer.train() → checkpoints/exp_{id}/checkpoint_epoch_N.pt
+     - Save normalizer with checkpoint for inference
      - Log to W&B: loss curves, val metrics
 
 5. EVALUATION PHASE
@@ -201,13 +205,15 @@ The framework operates as a standalone research pipeline consuming public GHCNh 
 | `records_excluded_by_filter` | `Int64` | | Excluded by report type |
 
 #### Processed Dataset (PyTorch Tensors)
+**Note:** Conversion from Polars DataFrame (in .parquet files) to PyTorch tensors happens during training via `load_dataset_from_parquet()`. The parquet files contain raw (unnormalized) data. Normalization is applied after tensor conversion using the global `Normalizer` class.
+
 | Tensor | Shape | Dtype | Notes |
 |--------|-------|-------|-------|
-| `observations` | `(N, T, V)` | `float32` | N=samples, T=timesteps, V=6 variables |
+| `observations` | `(N, T, V)` | `float32` | N=samples, T=timesteps, V=6 variables (normalized) |
 | `mask` | `(N, T, V)` | `bool` | True=observed, False=missing |
-| `target` | `(N, T, V)` | `float32` | Ground truth for masked values |
+| `target` | `(N, T, V)` | `float32` | Ground truth for masked values (normalized) |
 | `timestamps` | `(N, T)` | `int64` | Unix timestamps for temporal features |
-| `station_features` | `(N, F)` | `float32` | Lat, lon, elevation (normalized) |
+| `station_features` | `(N, F)` | `float32` | Lat, lon, elevation (normalized separately) |
 
 #### Configuration Schema (Pydantic)
 ```python

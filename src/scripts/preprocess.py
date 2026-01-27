@@ -30,7 +30,6 @@ from weather_imputation.data.ghcnh_loader import (
     filter_by_quality_flags,
     load_station_all_years,
 )
-from weather_imputation.data.normalization import Normalizer
 from weather_imputation.data.splits import create_split
 from weather_imputation.utils.progress import (
     print_error,
@@ -214,7 +213,14 @@ def preprocess(
 
     # Apply split to get train/val/test station IDs
     print_info(f"Applying {split_strategy} split...")
-    train_ids, val_ids, test_ids = create_split(metadata, split_config)
+    train_ids, val_ids, test_ids = create_split(
+        metadata,
+        strategy=split_config.strategy,
+        train_ratio=split_config.train_ratio,
+        val_ratio=split_config.val_ratio,
+        test_ratio=split_config.test_ratio,
+        seed=split_config.seed,
+    )
 
     print_info("Split results:")
     print_info(f"  Train: {len(train_ids)} stations")
@@ -245,11 +251,13 @@ def preprocess(
                 first_year = station_meta["first_observation"].year
                 last_year = station_meta["last_observation"].year
 
+                # Create list of years to load
+                years_to_load = list(range(first_year, last_year + 1))
+
                 # Load station data
                 df = load_station_all_years(
                     station_id=station_id,
-                    start_year=first_year,
-                    end_year=last_year,
+                    years=years_to_load,
                 )
 
                 if df is None or len(df) == 0:
@@ -263,7 +271,7 @@ def preprocess(
                 # Apply quality filtering
                 df = filter_by_quality_flags(
                     df,
-                    exclude_suspects=exclude_suspects,
+                    exclude_suspect=exclude_suspects,
                     variables=variable_list,
                 )
 
@@ -275,26 +283,18 @@ def preprocess(
                     pl.lit(station_meta.get("elevation")).alias("elevation"),
                 ])
 
-                # Normalize data if requested
+                # NOTE: Normalization is intentionally NOT done here.
+                # Normalization will be applied during training using the global
+                # Normalizer class (src/weather_imputation/data/normalization.py)
+                # which computes statistics across ALL training stations to ensure
+                # consistent scaling when batching multiple stations together.
+                #
+                # If normalization_method is specified, it's stored as metadata
+                # for documentation purposes only.
                 if normalization_method != "none":
-                    normalizer = Normalizer(method=normalization_method)  # type: ignore[arg-type]
-
-                    # Fit normalizer on observed values only
-                    value_cols = [v for v in variable_list if v in df.columns]
-                    if value_cols:
-                        normalizer.fit(df.select(value_cols))
-
-                        # Transform variables
-                        normalized_df = normalizer.transform(df.select(value_cols))
-
-                        # Replace normalized columns in original dataframe
-                        for col in value_cols:
-                            df = df.with_columns(normalized_df.select(col))
-
-                        # Save normalization stats for later inverse transform
-                        df = df.with_columns([
-                            pl.lit(json.dumps(normalizer.stats_)).alias("normalization_stats")
-                        ])
+                    df = df.with_columns([
+                        pl.lit(normalization_method).alias("normalization_method")
+                    ])
 
                 all_station_data.append(df)
 
