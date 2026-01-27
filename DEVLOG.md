@@ -4,6 +4,128 @@ This log tracks implementation progress, decisions, and findings during developm
 
 ---
 
+## 2026-01-26 - TASK-032: Create evaluation script CLI
+
+**Task:** Create comprehensive evaluation script CLI for imputation model performance testing.
+
+**Implementation:**
+Created `src/scripts/evaluate.py` with complete evaluation pipeline:
+
+1. **Model Support:**
+   - Classical models: linear, spline, MICE (via --model flag)
+   - Trained models: SAITS, CSDI (via --checkpoint flag, placeholder for future)
+   - Config file support (YAML/JSON) for hyperparameters
+   - Automatic model instantiation and fitting
+
+2. **Data Loading:**
+   - Loads test data from parquet files
+   - Extracts variable columns (excludes metadata)
+   - Converts to PyTorch tensors (N, T, V) format
+   - Handles timestamps for seasonal stratification
+
+3. **Synthetic Masking:**
+   - Applies evaluation masks using existing masking strategies (MCAR, MAR, MNAR, realistic)
+   - Configurable mask ratio (default: 20%)
+   - Computes gap lengths for stratified analysis
+   - Separates evaluation mask from original observation mask
+
+4. **Metrics Computation:**
+   - Overall metrics: RMSE, MAE, MSE, Bias, R²
+   - Stratified metrics (--stratified flag):
+     - By gap length (1-6h, 6-24h, 24-72h, 72-168h, >168h)
+     - By variable (temperature, pressure, etc.)
+     - By season (winter, spring, summer, fall)
+
+5. **Results Output:**
+   - JSON format (default): nested structure with all metrics
+   - Parquet format (--format parquet): flattened table structure
+   - Rich console tables displaying key results
+   - Organized by model name in output directory
+
+6. **CLI Features:**
+   - Comprehensive help documentation
+   - Input validation (requires --model OR --checkpoint)
+   - File existence checks
+   - --verbose and --quiet logging control
+   - Progress reporting via Rich console
+
+**Technical Decisions:**
+- **CONFIDENCE: KNOWN** - Implements SPEC.md Section 3.3 Data Flow (Evaluation Phase)
+- Uses Typer for type-safe CLI (consistent with preprocess.py)
+- Rich for formatted output (tables, progress bars)
+- PyTorch tensors for all computations (GPU-ready)
+- Flexible output formats for different downstream uses
+- Gap length computation for stratification (iterates through mask)
+
+**Helper Functions:**
+- `load_test_data()`: Parquet → PyTorch tensors
+- `create_classical_model()`: Factory for linear/spline/MICE
+- `load_trained_model()`: Placeholder for SAITS/CSDI (TASK-056+)
+- `apply_synthetic_mask()`: Wraps masking strategies
+- `compute_gap_lengths()`: Labels each gap position with length
+- `save_results()`: JSON or Parquet export
+- `display_results()`: Rich tables for console output
+
+**Integration Points:**
+- Input: `data/processed/test.parquet` (from preprocess.py)
+- Input: Model configs (YAML/JSON) for hyperparameters
+- Input: Checkpoints (.pt files) for trained models
+- Output: `data/results/{model}_results.{json|parquet}`
+- Uses: metrics, stratified, masking, models modules
+
+**Added to paths.py:**
+- `RESULTS_DIR = DATA_DIR / "results"` for evaluation outputs
+- Updated `ensure_directories()` to create results directory
+
+**Validation:**
+- ✓ Help command works: `uv run python src/scripts/evaluate.py --help`
+- ✓ All ruff checks passing (auto-fixed import order)
+- ✓ All imports resolve successfully
+- ✓ Follows existing script patterns (preprocess.py style)
+
+**Files Created:**
+- `src/scripts/evaluate.py` (531 lines)
+
+**Files Modified:**
+- `src/weather_imputation/config/paths.py` (added RESULTS_DIR)
+- `TODO.md` (marked TASK-032 as DONE)
+- `DEVLOG.md` (this entry)
+
+**Key Patterns Used:**
+- Typer Options with validation (min/max ranges, choices)
+- Rich console and tables for output
+- Error handling with early exits (typer.Exit(1))
+- Config loading (YAML/JSON with fallback)
+- Tensor shape conventions (N, T, V)
+
+**Limitations:**
+- SAITS/CSDI checkpoint loading not yet implemented (awaits TASK-056+)
+- Assumes single-batch evaluation (entire test set as one tensor)
+- Gap length computation is O(T*V*N) - acceptable for test data
+- No probabilistic metrics yet (CRPS, calibration - TASK-067+)
+- No downstream validation yet (degree days - TASK-083+)
+
+**Next Steps:**
+- TASK-033: Set up W&B project and integration
+- TASK-034: Create default YAML configurations for classical methods
+- TASK-035: Run end-to-end test with classical baselines
+- Test evaluation pipeline with real preprocessed data
+- Add probabilistic metrics for CSDI (TASK-067-069)
+
+**Lessons Learned:**
+- Missing RESULTS_DIR from paths.py caught by import error
+- Gap length computation can be done efficiently with iterative approach
+- Stratified results best displayed in separate tables (gap/variable/season)
+- JSON format better for nested results, Parquet for flat tables
+- Rich tables make CLI output much more readable
+
+**References:**
+- SPEC.md Section 3.3: Data Flow (Evaluation Phase)
+- SPEC.md Section 3.2: Component Design (evaluation modules)
+- SPEC.md FR-011 through FR-014: Metric requirements
+
+---
+
 ## 2026-01-26 - Station Exploration Notebook Validation (v0.3.11)
 
 ### TASK-027: Create Station Exploration Notebook with Filtering UI

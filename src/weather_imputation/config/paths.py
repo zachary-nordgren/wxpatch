@@ -11,6 +11,7 @@ PROJECT_ROOT = _THIS_FILE.parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 GHCNH_RAW_DIR = DATA_DIR / "raw" / "ghcnh"
 PROCESSED_DIR = DATA_DIR / "processed"
+RESULTS_DIR = DATA_DIR / "results"
 
 # Metadata files
 METADATA_PARQUET = PROCESSED_DIR / "metadata.parquet"
@@ -53,3 +54,4 @@ def ensure_directories() -> None:
     """Create all required directories if they don't exist."""
     GHCNH_RAW_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)

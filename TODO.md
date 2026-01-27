@@ -249,10 +249,10 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
   All ruff checks passing. Help command working correctly.
 
 #### TASK-032: Create evaluation script CLI
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run python src/scripts/evaluate.py --help` displays usage without errors
 - **Context:** `src/scripts/evaluate.py`, `src/weather_imputation/evaluation/`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Comprehensive CLI with classical model support, synthetic masking, stratified analysis, and flexible output formats. Help command working, all ruff checks passing.
 
 #### TASK-033: Set up W&B project and integration
 - **Status:** TODO
