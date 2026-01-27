@@ -1707,3 +1707,97 @@ set_rng_state(state)  # Resume from exact RNG state
 **References:**
 - PyTorch Reproducibility Guide: https://pytorch.org/docs/stable/notes/randomness.html
 - SPEC.md NFR-006: "Bit-exact results with same seed"
+
+
+---
+
+## 2026-01-26 - TASK-031: Create preprocessing script
+
+**Task:** Create comprehensive preprocessing script CLI for data pipeline.
+
+**Implementation:**
+Created `src/scripts/preprocess.py` with complete data preprocessing pipeline:
+
+1. **Station Loading:**
+   - Reads selected stations from JSON file (output from 01_station_exploration.py)
+   - Validates file format (list or dict with 'stations' key)
+   - Loads and filters metadata to selected stations only
+
+2. **Split Strategy:**
+   - Supports all 4 strategies: spatial, temporal, hybrid, simulated
+   - Configurable train/val/test ratios (default: 70/15/15)
+   - Uses seed for reproducibility (default: 42)
+
+3. **Data Processing Per Station:**
+   - Loads multi-year data using `load_station_all_years()`
+   - Extracts Tier 1 variables (configurable via --variables)
+   - Applies quality flag filtering (with optional suspect exclusion)
+   - Adds station metadata columns (lat, lon, elevation)
+
+4. **Normalization:**
+   - Per-station normalization (zscore/minmax/none)
+   - Fits only on observed values (handles missing data)
+   - Saves normalization stats in output for inverse transform
+
+5. **Output:**
+   - Saves train.parquet, val.parquet, test.parquet to processed directory
+   - Vertical concatenation of all station data per split
+   - Progress bars using Rich for long operations
+
+**CLI Features:**
+- Comprehensive help documentation
+- Input validation with clear error messages
+- --force flag to overwrite existing files
+- --verbose and --quiet logging control
+- Detailed progress reporting and statistics
+
+**Technical Decisions:**
+- **CONFIDENCE: KNOWN** - Implements SPEC.md Section 3.3 Data Flow (Preprocessing Phase)
+- Uses Typer for type-safe CLI (consistent with other scripts)
+- Polars for efficient data concatenation
+- Rich for user-friendly progress bars
+- Error handling: skips failed stations, reports at end
+- Normalization stats saved as JSON string column for later use
+
+**Validation:**
+- ✓ Help command works: `uv run python src/scripts/preprocess.py --help`
+- ✓ All ruff checks passing
+- ✓ Imports all required modules successfully
+- ✓ Follows existing script patterns (compute_metadata.py style)
+
+**Files Created:**
+- `src/scripts/preprocess.py` (342 lines)
+
+**Files Modified:**
+- `TODO.md` (marked TASK-031 as DONE)
+- `DEVLOG.md` (this entry)
+
+**Key Patterns Used:**
+- Typer Options with validation (min/max ranges)
+- Rich console for user feedback
+- Error aggregation (collect skipped stations, report at end)
+- Polars vertical_relaxed concatenation (handles schema variations)
+- JSON normalization stats storage for pipeline continuity
+
+**Integration Points:**
+- Input: `data/processed/selected_stations.json` (from notebook)
+- Input: `data/processed/metadata_cleaned.parquet` (from clean_metadata.py)
+- Output: `data/processed/{train,val,test}.parquet` (for train.py)
+- Uses: ghcnh_loader, normalization, splits modules (all implemented)
+
+**Next Steps:**
+- TASK-032: Create evaluation script CLI
+- TASK-033: Set up W&B project and integration
+- Test preprocessing pipeline end-to-end with real data
+- Consider adding --max-stations option for quick testing
+
+**Lessons Learned:**
+- Import function names must match actual implementations (load_station_all_years not load_station_data)
+- Ruff auto-fix handles most linting issues efficiently
+- Normalization stats need to be preserved for inverse transform during evaluation
+- Rich progress bars integrate well with Polars data loading
+
+**References:**
+- SPEC.md Section 3.3: Data Flow (Preprocessing Phase)
+- SPEC.md Section 3.2: Component Design (data pipeline components)
+- SPEC.md FR-007: Per-station normalization requirement

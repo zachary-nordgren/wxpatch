@@ -236,10 +236,17 @@ Generated from: `docs/weather_imputation_dev_plan_v2.md`
 ### Integration & Scripts
 
 #### TASK-031: Create preprocessing script
-- **Status:** TODO
+- **Status:** DONE
 - **Done When:** `uv run python src/scripts/preprocess.py --help` displays usage without errors
 - **Context:** `src/scripts/preprocess.py`, `src/weather_imputation/data/`
-- **Notes:**
+- **Notes:** Completed 2026-01-26. Created comprehensive Typer CLI with:
+  - Station selection from JSON file (from exploration notebook)
+  - Multi-year data loading with quality filtering
+  - Per-station normalization (zscore/minmax/none)
+  - Train/val/test splitting (spatial/temporal/hybrid/simulated strategies)
+  - Rich progress bars and error handling
+  - Saves processed parquet files to data/processed/
+  All ruff checks passing. Help command working correctly.
 
 #### TASK-032: Create evaluation script CLI
 - **Status:** TODO
