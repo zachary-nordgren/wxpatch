@@ -199,25 +199,21 @@ def apply_synthetic_mask(
     # Apply synthetic masking
     if masking_strategy == "mcar":
         synthetic_mask = apply_mcar_mask(
-            observed, mask, mask_ratio=mask_ratio, min_gap_length=1, max_gap_length=168
+            observed, missing_ratio=mask_ratio, min_gap_length=1, max_gap_length=168
         )
     elif masking_strategy == "mar":
         synthetic_mask = apply_mar_mask(
-            observed, mask, mask_ratio=mask_ratio, extreme_bias=3.0
+            observed, missing_ratio=mask_ratio, extreme_percentile=0.15
         )
     elif masking_strategy == "mnar":
         synthetic_mask = apply_mnar_mask(
-            observed, mask, mask_ratio=mask_ratio, extreme_bias=5.0
+            observed, missing_ratio=mask_ratio, extreme_multiplier=5.0
         )
     elif masking_strategy == "realistic":
         synthetic_mask = apply_realistic_mask(
             observed,
-            mask,
-            mask_ratio=mask_ratio,
-            distribution="empirical",
-            short_ratio=0.5,
-            medium_ratio=0.4,
-            long_ratio=0.1,
+            missing_ratio=mask_ratio,
+            gap_distribution="empirical",
         )
     else:
         raise ValueError(f"Unknown masking strategy: {masking_strategy}")

@@ -21,7 +21,7 @@ Run with: uv run marimo edit notebooks/01_station_exploration.py
 
 import marimo
 
-__generated_with = "0.19.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="medium")
 
 
@@ -89,7 +89,6 @@ def load_data(load_metadata, mo):
             True,
             mo.md("**Error**: No metadata file found. Run `compute_metadata.py` first.")
         )
-
     return (metadata,)
 
 
@@ -116,6 +115,25 @@ def filtering_controls(mo):
         label="Require Valid Coordinates"
     )
     return min_observations, min_years, require_valid_coords, temp_completeness
+
+
+@app.cell
+def display_filtering_controls(
+    min_observations,
+    min_years,
+    mo,
+    require_valid_coords,
+    temp_completeness,
+):
+    """Display the filtering controls."""
+    mo.vstack([
+        mo.md("## 2. Filtering Controls"),
+        temp_completeness,
+        min_years,
+        min_observations,
+        require_valid_coords,
+    ])
+    return
 
 
 @app.cell
@@ -257,7 +275,7 @@ def create_and_display_map(MarkerCluster, filtered, folium, mo):
         marker_cluster = MarkerCluster().add_to(station_map)
 
         # Add markers (limit to 2000 for performance)
-        sample = filtered.head(4458)
+        sample = filtered.head(2000)
         for row in sample.iter_rows(named=True):
             lat, lon = row.get("latitude"), row.get("longitude")
             if lat is not None and lon is not None:
@@ -306,11 +324,23 @@ def clustering_controls(mo):
             "total_observation_count",
             "temperature_mean",
             "temperature_std",
+            "dew_point_mean",
         ],
-        value=["latitude", "longitude", "temperature_completeness_pct"],
+        value=["latitude", "longitude", "temperature_mean"],
         label="Clustering Features"
     )
     return cluster_features, n_clusters
+
+
+@app.cell
+def display_clustering_controls(cluster_features, mo, n_clusters):
+    """Display clustering controls."""
+    mo.vstack([
+        mo.md("## 5. Clustering Analysis"),
+        n_clusters,
+        cluster_features,
+    ])
+    return
 
 
 @app.cell
@@ -411,16 +441,14 @@ def show_clustering_status(
 @app.cell
 def cluster_visualization(clustered_full, mo, pl, px):
     """Visualize clusters on map."""
-    _output = None
-
     if clustered_full is None or "cluster" not in clustered_full.columns:
-        _output = mo.md("*No clustering results to display*")
+        viz_output = mo.md("*No clustering results to display*")
     else:
         # Scatter plot of clusters
         df_pd = clustered_full.filter(pl.col("cluster").is_not_null()).to_pandas()
 
         if len(df_pd) == 0:
-            _output = mo.md("*No clustering results to display*")
+            viz_output = mo.md("*No clustering results to display*")
         else:
             cluster_fig = px.scatter_geo(
                 df_pd,
@@ -428,7 +456,7 @@ def cluster_visualization(clustered_full, mo, pl, px):
                 lon="longitude",
                 color="cluster",
                 hover_name="station_id",
-                hover_data=["station_name", "temperature_completeness_pct"],
+                hover_data=["station_name", "dew_point_stats"],
                 title="Station Clusters (Geographic)",
                 color_continuous_scale="Viridis",
             )
@@ -441,9 +469,10 @@ def cluster_visualization(clustered_full, mo, pl, px):
                 showcountries=True,
                 countrycolor="white",
             )
-            _output = cluster_fig
+            viz_output = cluster_fig
 
-    return _output
+    viz_output  # noqa: B018
+    return
 
 
 @app.cell
@@ -480,33 +509,64 @@ def display_cluster_stats(cluster_stats_df, mo, pl):
             pl.col("centroid_lat").round(2),
             pl.col("centroid_lon").round(2),
         ])
-        _output = mo.vstack([
+        stats_output = mo.vstack([
             mo.md("### Cluster Statistics"),
             mo.ui.table(display_df.to_pandas()),
         ])
     else:
-        _output = mo.md("*No cluster statistics available*")
+        stats_output = mo.md("*No cluster statistics available*")
 
-    return _output
+    stats_output  # noqa: B018
+    return
 
 
 @app.cell
-def export_controls(PROCESSED_DIR, filtered, mo):
-    """Export filtered stations control."""
-    export_path = PROCESSED_DIR / "filtered_stations.csv"
+def create_export_button(mo):
+    """Create export button (separate cell from value access)."""
+    export_button = mo.ui.run_button(label="Export Filtered Stations to CSV")
+    return (export_button,)
 
-    export_button = mo.ui.run_button(label="Export to CSV")
+
+@app.cell
+def handle_export(PROCESSED_DIR, export_button, filtered, json, mo):
+    """Handle export button click (separate cell to access button value)."""
+    export_path = PROCESSED_DIR / "selected_stations.csv"
 
     if export_button.value:
+        # Export to CSV
         filtered.write_csv(export_path)
-        export_status = f"Exported {len(filtered):,} stations to `{export_path}`"
+
+        # Also export as JSON list for preprocessing script
+        json_path = PROCESSED_DIR / "selected_stations.json"
+        station_ids = filtered.select("station_id").to_series().to_list()
+        with open(json_path, "w") as f:
+            json.dump(station_ids, f, indent=2)
+
+        export_status = mo.md(f"""
+        ✅ **Export Complete!**
+
+        Exported {len(filtered):,} stations to:
+        - CSV: `{export_path}`
+        - JSON: `{json_path}`
+
+        Use the JSON file with preprocessing script:
+        ```bash
+        uv run python src/scripts/preprocess.py --stations-file {json_path}
+        ```
+        """)
     else:
-        export_status = f"Click to export {len(filtered):,} stations to `{export_path}`"
+        export_status = mo.md(f"""
+        Click the button above to export **{len(filtered):,}** filtered stations.
+
+        This will create:
+        - `selected_stations.csv` - Full metadata table
+        - `selected_stations.json` - Station ID list for preprocessing
+        """)
 
     mo.vstack([
         mo.md("## 6. Export Filtered Stations"),
         export_button,
-        mo.md(export_status),
+        export_status,
     ])
     return
 

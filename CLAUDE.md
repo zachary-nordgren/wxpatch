@@ -8,7 +8,7 @@ Development agent under human supervision. Propose implementations; human execut
 **CRITICAL: Follow this workflow strictly for all tasks:**
 
 1. **Study SPEC.md** - Understand project goals and architecture
-2. **Pick ONE task from TODO.md** - Select highest priority TODO or IN_PROGRESS task
+2. **Pick ONE task from TODO.md** - Select highest priority TODO or IN_PROGRESS task (If user requests a different task, add to TODO.md before starting work)
 3. **Update task to IN_PROGRESS** - Mark task status before starting work
 4. **Implement task fully** - Work until done-when criteria passes OR give up after 2 failed attempts
 5. **Update TODO.md** - Mark task DONE/BLOCKED/FAILED with notes
@@ -27,8 +27,11 @@ For implementation tasks, always include:
 
 STOP and ask if you'd need a SPECULATIVE assumption about external APIs/libraries.
 
-## Key Constraints
+## Key Conventions
 
+- Use Pydantic for configuration
+- Use Polars for data processing
+- Use Rich for CLI output
 - Include error handling in all code
 - Use event logging by aggregating data into log structures, emit full log with context (not piecemeal)
 - Stay within task scope - don't expand unilaterally
@@ -43,6 +46,10 @@ After 2 failed attempts on the same problem, STOP and report what you've learned
 - **SPEC.md** - Project specification and architecture *(start here)*
 - **TODO.md** - Complete task backlog with priorities and status
 - **DEVLOG.md** - Development log with decisions and version history
+  - **Do NOT read the entire file on each task** - it wastes context
+  - Read last 100 lines initially
+  - Use grep/search to find specific task IDs or keywords if needed
+  - Only consult when you need historical context about decisions
 - **README.md** - Usage guide, command reference, data schemas, directory structure
 - **pyproject.toml** - Dependencies and tool configuration
 - **docs/ghcnh_DOCUMENTATION.pdf** - Official NOAA data format documentation

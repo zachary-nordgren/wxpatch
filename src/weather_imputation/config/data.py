@@ -213,7 +213,8 @@ class SplitConfig(BaseConfig):
         ...     strategy="simulated",
         ...     train_ratio=0.7,
         ...     val_ratio=0.15,
-        ...     test_ratio=0.15
+        ...     test_ratio=0.15,
+        ...     seed=42
         ... )
     """
 
@@ -244,6 +245,11 @@ class SplitConfig(BaseConfig):
         ge=0.0,
         le=1.0,
         description="Proportion of data for testing (0.0-1.0)",
+    )
+    seed: int = Field(
+        default=42,
+        ge=0,
+        description="Random seed for reproducible splitting",
     )
 
     @field_validator("test_ratio")

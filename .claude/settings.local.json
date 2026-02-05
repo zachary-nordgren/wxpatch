@@ -20,7 +20,12 @@
       "Bash(git commit:*)",
       "Bash(uv run ruff:*)",
       "Bash(uv run:*)",
-      "Bash(uv add:*)"
+      "Bash(uv add:*)",
+      "WebSearch",
+      "Bash(git check-ignore:*)",
+      "Bash(test:*)",
+      "Bash(uv pip list:*)",
+      "Bash(ls:*)"
     ]
   }
 }
